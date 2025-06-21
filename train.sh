@@ -1,11 +1,11 @@
 torchrun --nnodes=1 --nproc_per_node=4 train.py \
 --local_dir "/tmp/llama/" \
 --input_model_filename "Qwen/Qwen3-4B" \
---output_model_filename "1B-finetuned" \
+--output_model_filename "Qwen/Qwen3-4B-4bit" \
 --train_data_local_path "/tmp/train.jsonl" \
 --do_train True \
 --do_eval False \
---model_max_length 2048 \
+--model_max_length 16384 \
 --fp16 False \
 --bf16 True \
 --log_on_each_node False \
