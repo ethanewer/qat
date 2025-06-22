@@ -31,7 +31,7 @@ def main():
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
 
     formatted_inputs = tokenizer.apply_chat_template(
-        [[{"role": "user", "content": problem}] for problem in ds["problem"]],
+        [[{"role": "user", "content": problem}] for problem in ds["problem"]],  # type: ignore
         tokenize=False,
         add_generation_prompt=True,
         enable_thinking=True,
