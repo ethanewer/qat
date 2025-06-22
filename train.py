@@ -1,15 +1,13 @@
 import os
 from dataclasses import dataclass, field
-from functools import partial
 
 import torch
-from torch import Tensor
-from datasets import load_from_disk
+from datasets import load_from_disk  # type: ignore
 from transformers.data.data_collator import DataCollatorWithPadding
 from transformers.hf_argparser import HfArgumentParser
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
-from trl import SFTTrainer, SFTConfig
+from trl import SFTConfig, SFTTrainer  # type: ignore
 
 from paretoq_qat import replace_linear_with_quantized_linear
 
@@ -39,22 +37,22 @@ def main():
 
     dataset = load_from_disk(model_args.train_data_local_path)
     train_dataset = dataset["train"]
-    eval_dataset  = dataset["eval"]
+    eval_dataset = dataset["eval"]
 
     tokenizer = AutoTokenizer.from_pretrained(
-        model_args.input_model_filename, 
+        model_args.input_model_filename,
         model_max_length=model_args.model_max_length,
     )
     data_collator = DataCollatorWithPadding(tokenizer)
-    
+
     trainer = SFTTrainer(
         model=model,
         args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        train_dataset=train_dataset,  # type: ignore
+        eval_dataset=eval_dataset,  # type: ignore
         data_collator=data_collator,
     )
-    
+
     trainer.train()
     trainer.save_model()
 
