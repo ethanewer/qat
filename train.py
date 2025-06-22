@@ -1,13 +1,12 @@
-import argparse
 import os
-from argparse import Namespace
+from dataclasses import dataclass, field
 
 import torch
 from sklearn.model_selection import train_test_split  # type: ignore
 from torch import Tensor
-from torch import distributed as dist
 from torch.utils.data import Dataset
 from transformers.data.data_collator import DataCollatorForLanguageModeling
+from transformers.hf_argparser import HfArgumentParser
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from transformers.trainer import Trainer
@@ -35,101 +34,65 @@ class SFTDataset(Dataset):
         }
 
 
-def parse_args() -> Namespace:
-    p = argparse.ArgumentParser()
-    p.add_argument("--local_dir", type=str, required=True)
-    p.add_argument("--input_model_filename", type=str, required=True)
-    p.add_argument("--output_model_filename", type=str, required=True)
-    p.add_argument("--train_data_local_path", type=str, required=True)
-    p.add_argument("--num_eval", type=int, required=False, default=100)
-    p.add_argument("--do_train", type=lambda x: x.lower() == "true", default=True)
-    p.add_argument("--do_eval", type=lambda x: x.lower() == "true", default=False)
-    p.add_argument("--model_max_length", type=int, default=2048)
-    p.add_argument("--fp16", type=lambda x: x.lower() == "true", default=False)
-    p.add_argument("--bf16", type=lambda x: x.lower() == "true", default=False)
-    p.add_argument("--tf32", type=lambda x: x.lower() == "true", default=True)
-    p.add_argument(
-        "--gradient_checkpointing",
-        type=lambda x: x.lower() == "true",
-        default=False,
-    )
-    p.add_argument("--qat", type=lambda x: x.lower() == "true", default=False)
-    p.add_argument("--w_bits", type=int, default=4)
-    p.add_argument(
-        "--log_on_each_node",
-        type=lambda x: x.lower() == "true",
-        default=False,
-    )
-    p.add_argument("--logging_dir", type=str, default=None)
-    p.add_argument("--num_train_epochs", type=int, default=1)
-    p.add_argument("--per_device_train_batch_size", type=int, default=2)
-    p.add_argument("--per_device_eval_batch_size", type=int, default=1)
-    p.add_argument("--gradient_accumulation_steps", type=int, default=1)
-    p.add_argument("--evaluation_strategy", type=str, default="no")
-    p.add_argument("--save_strategy", type=str, default="steps")
-    p.add_argument("--save_steps", type=int, default=2000)
-    p.add_argument("--report_to", type=str, default="tensorboard")
-    p.add_argument("--save_total_limit", type=int, default=1)
-    p.add_argument("--learning_rate", type=float, default=2e-5)
-    p.add_argument("--weight_decay", type=float, default=0.0)
-    p.add_argument("--warmup_ratio", type=float, default=0.0)
-    p.add_argument("--lr_scheduler_type", type=str, default="cosine")
-    p.add_argument("--logging_steps", type=int, default=1)
-    return p.parse_args()
+@dataclass
+class ModelArguments:
+    """Custom arguments for model & data paths and QAT settings."""
 
-
-def get_training_arguments(args: Namespace) -> TrainingArguments:
-    return TrainingArguments(  # type: ignore
-        output_dir=os.path.join(args.local_dir, args.output_model_filename),
-        do_train=args.do_train,
-        do_eval=args.do_eval,
-        num_train_epochs=args.num_train_epochs,
-        per_device_train_batch_size=args.per_device_train_batch_size,
-        per_device_eval_batch_size=args.per_device_eval_batch_size,
-        gradient_accumulation_steps=args.gradient_accumulation_steps,
-        save_strategy=args.save_strategy,
-        save_steps=args.save_steps,
-        logging_steps=args.logging_steps,
-        report_to=args.report_to,
-        logging_dir=args.logging_dir,
-        save_total_limit=args.save_total_limit,
-        learning_rate=args.learning_rate,
-        weight_decay=args.weight_decay,
-        warmup_ratio=args.warmup_ratio,
-        lr_scheduler_type=args.lr_scheduler_type,
-        fp16=args.fp16,
-        bf16=args.bf16,
-        tf32=args.tf32,
-        gradient_checkpointing=args.gradient_checkpointing,
-        disable_tqdm=not args.log_on_each_node,
-        remove_unused_columns=False,
+    local_dir: str = field(
+        metadata={"help": "Directory where outputs are saved and loaded from."}
+    )
+    input_model_filename: str = field(
+        metadata={"help": "Pretrained model identifier or path."}
+    )
+    output_model_filename: str = field(
+        metadata={"help": "Folder name under `local_dir` to save the fine-tuned model."}
+    )
+    train_data_local_path: str = field(
+        metadata={"help": "Path to the serialized training data (torch.save)."}
+    )
+    num_eval: int = field(
+        default=100, metadata={"help": "Number of examples to hold out for eval."}
+    )
+    qat: bool = field(
+        default=False,
+        metadata={"help": "Whether to apply quantization-aware training."},
+    )
+    w_bits: int = field(
+        default=4, metadata={"help": "Bit-width for QAT weight quantization."}
     )
 
 
 def main():
-    args = parse_args()
+    parser = HfArgumentParser((ModelArguments, TrainingArguments))  # type: ignore
+    model_args, training_args = parser.parse_args_into_dataclasses()
 
-    dist.init_process_group(backend="nccl")
+    training_args.output_dir = os.path.join(
+        model_args.local_dir, model_args.output_model_filename
+    )
 
-    model = AutoModelForCausalLM.from_pretrained(args.input_model_filename)
-    replace_linear_with_quantized_linear(model, w_bits=args.w_bits)
+    torch.distributed.init_process_group(backend="nccl")
+
+    model = AutoModelForCausalLM.from_pretrained(model_args.input_model_filename)
+    if model_args.qat:
+        replace_linear_with_quantized_linear(model, w_bits=model_args.w_bits)
+
     model.config.use_cache = False
 
-    data = torch.load(args.train_data_local_path)
+    data = torch.load(model_args.train_data_local_path)
     train_data, eval_data = train_test_split(
-        data, test_size=args.num_eval, random_state=0
+        data,
+        test_size=model_args.num_eval,
+        random_state=0,
     )
     train_dataset = SFTDataset(train_data)
     eval_dataset = SFTDataset(eval_data)
 
-    data_collator = DataCollatorForLanguageModeling(
-        tokenizer=AutoTokenizer.from_pretrained(args.model_name),
-        mlm=False,
-    )
+    tokenizer = AutoTokenizer.from_pretrained(model_args.input_model_filename)
+    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
     trainer = Trainer(
         model=model,
-        args=get_training_arguments(args),
+        args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         data_collator=data_collator,
