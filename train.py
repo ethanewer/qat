@@ -1,8 +1,10 @@
 import argparse
 import os
+from argparse import Namespace
 
 import torch
 from sklearn.model_selection import train_test_split  # type: ignore
+from torch import Tensor
 from torch import distributed as dist
 from torch.utils.data import Dataset
 from transformers.data.data_collator import DataCollatorForLanguageModeling
@@ -15,13 +17,13 @@ from paretoq_qat import replace_linear_with_quantized_linear
 
 
 class SFTDataset(Dataset):
-    def __init__(self, examples):
+    def __init__(self, examples: list[dict[str, list[int]]]) -> None:
         self.examples = examples
 
-    def __len__(self):
+    def __len__(self) -> int:
         return len(self.examples)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx: int) -> dict[str, Tensor]:
         ex = self.examples[idx]
         prompt_ids = ex["input_ids"]
         response_ids = ex["output_ids"]
@@ -33,7 +35,7 @@ class SFTDataset(Dataset):
         }
 
 
-def parse_args():
+def parse_args() -> Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--local_dir", type=str, required=True)
     p.add_argument("--input_model_filename", type=str, required=True)
@@ -76,7 +78,7 @@ def parse_args():
     return p.parse_args()
 
 
-def get_training_arguments(args):
+def get_training_arguments(args: Namespace) -> TrainingArguments:
     return TrainingArguments(  # type: ignore
         output_dir=os.path.join(args.local_dir, args.output_model_filename),
         do_train=args.do_train,
