@@ -46,9 +46,7 @@ class LsqBinaryTernaryExtension(torch.autograd.Function):
         alpha = torch.where(alpha > eps, alpha, eps)
 
         grad_scale = (
-            1.0 / math.sqrt(input.numel())
-            if not Qp
-            else 1.0 / math.sqrt(input.numel() * Qp)
+            1.0 / math.sqrt(input.numel()) if not Qp else 1.0 / math.sqrt(input.numel() * Qp)
         )
         ctx.save_for_backward(input, alpha)
         ctx.other = grad_scale, Qn, Qp, layerwise
@@ -77,9 +75,7 @@ class LsqBinaryTernaryExtension(torch.autograd.Function):
         )  # this is more cpu-friendly than torch.ones(input.shape)
         if ctx.num_bits == 1:
             if layerwise:
-                grad_alpha = (
-                    ((input.sign()) * grad_outputs * grad_scale).sum().unsqueeze(dim=0)
-                )
+                grad_alpha = ((input.sign()) * grad_outputs * grad_scale).sum().unsqueeze(dim=0)
             else:
                 grad_alpha = (input.sign()) * grad_outputs * grad_scale
                 grad_alpha = torch.sum(grad_alpha, dim=-1, keepdim=True)
@@ -149,9 +145,7 @@ class StretchedElasticQuant(torch.autograd.Function):
         alpha = torch.where(alpha > eps, alpha, eps)
 
         grad_scale = (
-            1.0 / math.sqrt(input.numel())
-            if not Qp
-            else 1.0 / math.sqrt(input.numel() * Qp)
+            1.0 / math.sqrt(input.numel()) if not Qp else 1.0 / math.sqrt(input.numel() * Qp)
         )
         ctx.save_for_backward(input, alpha)
         clip_val = 1 - 1e-2
@@ -168,9 +162,7 @@ class StretchedElasticQuant(torch.autograd.Function):
             q_w = input.sign()
         else:
             q_w = (
-                torch.round(
-                    torch.clamp(input / alpha, -clip_val, clip_val) * n_levels - shift
-                )
+                torch.round(torch.clamp(input / alpha, -clip_val, clip_val) * n_levels - shift)
                 + shift
             ) / n_levels
         w_q = q_w * alpha
@@ -199,9 +191,7 @@ class StretchedElasticQuant(torch.autograd.Function):
         indicate_middle = 1.0 - indicate_small - indicate_big
         if ctx.num_bits == 1:
             if layerwise:
-                grad_alpha = (
-                    ((input.sign()) * grad_outputs * grad_scale).sum().unsqueeze(dim=0)
-                )
+                grad_alpha = ((input.sign()) * grad_outputs * grad_scale).sum().unsqueeze(dim=0)
             else:
                 grad_alpha = (input.sign()) * grad_outputs * grad_scale
                 grad_alpha = torch.sum(grad_alpha, dim=-1, keepdim=True)
@@ -217,8 +207,7 @@ class StretchedElasticQuant(torch.autograd.Function):
                                 -q_w
                                 + (
                                     torch.round(
-                                        torch.clamp(q_w, -clip_val, clip_val) * n_levels
-                                        - shift
+                                        torch.clamp(q_w, -clip_val, clip_val) * n_levels - shift
                                     )
                                     + shift
                                 )
@@ -241,8 +230,7 @@ class StretchedElasticQuant(torch.autograd.Function):
                             -q_w
                             + (
                                 torch.round(
-                                    torch.clamp(q_w, -clip_val, clip_val) * n_levels
-                                    - shift
+                                    torch.clamp(q_w, -clip_val, clip_val) * n_levels - shift
                                 )
                                 + shift
                             )
