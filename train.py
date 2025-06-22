@@ -27,50 +27,33 @@ class SFTDataset(Dataset):
         prompt_ids = ex["input_ids"]
         response_ids = ex["output_ids"]
         input_ids = prompt_ids + response_ids
+        attention_mask = [1] * len(input_ids)
         labels = [-100] * len(prompt_ids) + response_ids
         return {
             "input_ids": torch.tensor(input_ids, dtype=torch.int64),
+            "attention_mask": torch.tensor(attention_mask, dtype=torch.int64),
             "labels": torch.tensor(labels, dtype=torch.int64),
         }
 
 
 @dataclass
 class ModelArguments:
-    """Custom arguments for model & data paths and QAT settings."""
-
-    local_dir: str = field(
-        metadata={"help": "Directory where outputs are saved and loaded from."}
-    )
-    input_model_filename: str = field(
-        metadata={"help": "Pretrained model identifier or path."}
-    )
-    output_model_filename: str = field(
-        metadata={"help": "Folder name under `local_dir` to save the fine-tuned model."}
-    )
-    train_data_local_path: str = field(
-        metadata={"help": "Path to the serialized training data (torch.save)."}
-    )
-    num_eval: int = field(
-        default=100, metadata={"help": "Number of examples to hold out for eval."}
-    )
-    qat: bool = field(
-        default=False,
-        metadata={"help": "Whether to apply quantization-aware training."},
-    )
-    w_bits: int = field(
-        default=4, metadata={"help": "Bit-width for QAT weight quantization."}
-    )
+    local_dir: str = field(metadata={"help": "Directory where outputs are saved and loaded from."})
+    input_model_filename: str = field(metadata={"help": "Pretrained model identifier or path."})
+    output_model_filename: str = field(metadata={"help": "Folder to save the fine-tuned model."})
+    train_data_local_path: str = field(metadata={"help": "Path to training data."})
+    num_eval: int = field(default=100, metadata={"help": "Number eval examples."})
+    qat: bool = field(default=False, metadata={"help": "Whether to use QAT."})
+    w_bits: int = field(default=4, metadata={"help": "Bit-width for QAT weight quantization."})
 
 
 def main():
     parser = HfArgumentParser((ModelArguments, TrainingArguments))  # type: ignore
     model_args, training_args = parser.parse_args_into_dataclasses()
 
-    training_args.output_dir = os.path.join(
-        model_args.local_dir, model_args.output_model_filename
-    )
+    training_args.output_dir = os.path.join(model_args.local_dir, model_args.output_model_filename)
 
-    torch.distributed.init_process_group(backend="nccl")
+    # torch.distributed.init_process_group(backend="nccl")
 
     model = AutoModelForCausalLM.from_pretrained(model_args.input_model_filename)
     if model_args.qat:
@@ -101,7 +84,8 @@ def main():
     trainer.train()
     trainer.save_model()
 
-    torch.distributed.barrier()
+    if torch.distributed.is_initialized():
+        torch.distributed.barrier()
 
 
 if __name__ == "__main__":

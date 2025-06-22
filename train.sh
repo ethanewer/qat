@@ -1,8 +1,8 @@
 torchrun --nnodes=1 --nproc_per_node=4 train.py \
-  --local_dir "/tmp/llama/" \
+  --local_dir "/local/qwen3-4b/" \
   --input_model_filename "Qwen/Qwen3-4B" \
   --output_model_filename "Qwen/Qwen3-4B-4bit" \
-  --train_data_local_path "/tmp/train.jsonl" \
+  --train_data_local_path "/local/train.pt" \
   --num_eval 100 \
   --qat True \
   --w_bits 4 \
@@ -28,5 +28,5 @@ torchrun --nnodes=1 --nproc_per_node=4 train.py \
   --per_device_eval_batch_size 1 \
   --gradient_accumulation_steps 1 \
   --report_to tensorboard \
-  --logging_dir /tmp/output/runs/current \
+  --logging_dir /local/output/runs/current \
   --disable_tqdm True
