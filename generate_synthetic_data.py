@@ -1,30 +1,26 @@
 import argparse
+
 import torch
-from transformers import AutoTokenizer
-from vllm import LLM, SamplingParams
-from datasets import load_dataset
-from tqdm import tqdm
+from datasets import load_dataset  # type: ignore
+from transformers.models.auto.tokenization_auto import AutoTokenizer
+from vllm import LLM, SamplingParams  # type: ignore
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate Qwen3-4B distillation dataset")
     parser.add_argument(
-        "--num-examples", type=int, default=None,
-        help="Maximum number of examples to process from each split (None = all)"
+        "--num-examples",
+        type=int,
+        default=None,
+        help="Maximum number of examples to process from each split (None = all)",
     )
     parser.add_argument(
-        "--output-file", type=str, default="qwen3_4b_data.pt",
-        help="Path to save the output PyTorch file"
+        "--output-file",
+        type=str,
+        default="qwen3_4b_data.pt",
+        help="Path to save the output PyTorch file",
     )
     return parser.parse_args()
-
-
-def process_response(response):
-    return {
-        "input_text": response.prompt,
-        "input_ids": response.prompt_token_ids,
-        "output_text": responses[0].outputs[0].text,
-        "output_ids": rresponses[0].outputs[0].token_ids,
-    }   
 
 
 def main():
@@ -42,14 +38,14 @@ def main():
     )
 
     if args.num_examples is not None:
-        formatted_inputs = formatted_inputs[:args.num_example]
+        formatted_inputs = formatted_inputs[: args.num_example]
 
     model = LLM(
-        model="Qwen/Qwen3-4B", 
-        tensor_parallel_size=4,  
+        model="Qwen/Qwen3-4B",
+        tensor_parallel_size=4,
         max_num_seqs=256,
         max_num_batched_tokens=131072,
-        gpu_memory_utilization=0.9,  
+        gpu_memory_utilization=0.9,
     )
     sampling_params = SamplingParams(max_tokens=16384)
 
@@ -63,14 +59,15 @@ def main():
         {
             "input_text": response.prompt,
             "input_ids": response.prompt_token_ids,
-            "output_text": responses[0].outputs[0].text,
-            "output_ids": responses[0].outputs[0].token_ids,
-        }   
+            "output_text": response.outputs[0].text,
+            "output_ids": response.outputs[0].token_ids,
+        }
         for response in responses
     ]
-    
+
     torch.save(processed_responses, args.output_file)
     print(f"Saved {len(processed_responses)} examples to {args.output_file}")
+
 
 if __name__ == "__main__":
     main()
