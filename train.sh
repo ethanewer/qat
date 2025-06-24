@@ -19,7 +19,7 @@ accelerate launch \
   --eval_strategy steps \
   --eval_steps 100 \
   --save_strategy steps \
-  --save_steps 500 \
+  --save_steps 1000 \
   --save_total_limit 100 \
   --logging_strategy steps \
   --logging_steps 1 \
