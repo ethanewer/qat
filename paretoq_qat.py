@@ -326,10 +326,10 @@ def replace_linear_with_quantized_linear(
     w_bits: int = 16,
     weight_layerwise: bool = False,
 ) -> None:
-    for child in list(module.children()):
-        if isinstance(child, nn.Linear):
-            patch_linear_with_quantized_linear(child, w_bits, weight_layerwise)
-        else:
+    if isinstance(module, nn.Linear):
+        patch_linear_with_quantized_linear(module, w_bits, weight_layerwise)
+    else:
+        for child in list(module.children()):
             replace_linear_with_quantized_linear(child, w_bits, weight_layerwise)
 
 
