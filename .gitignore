@@ -1,3 +1,5 @@
 __pycache__*
 local/*.pt
 local/qwen3_4b_dataset
+local/qwen3-4b*
+local/output/runs/current*

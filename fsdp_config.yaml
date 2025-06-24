@@ -1,40 +1,16 @@
-# accelerate_config.yaml
-
-#— Basic environment
 compute_environment: LOCAL_MACHINE
 distributed_type: FSDP
 mixed_precision: bf16
 
-#— How many processes / GPUs
 machine_rank: 0
 num_processes: 4
 
-#— FSDP tuning
 fsdp_config:
-  # Automatically wrap your transformer blocks
   fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
-  
-  # (Optional) If your model’s block class isn’t standard, list it here
-  # fsdp_transformer_layer_cls_to_wrap:
-  #   - QwenBlock
-
-  # When to prefetch gradients
   fsdp_backward_prefetch_policy: BACKWARD_PRE
-
-  # Load model weights into CPU RAM first (speeds up initial load on large models)
   fsdp_cpu_ram_efficient_loading: true
-
-  # Don’t offload parameters to CPU after shards (we have 80 GB/GPU, so keep on GPU)
   fsdp_offload_params: false
-
-  # Shard everything (parameters, gradients, optimizer state)
   fsdp_sharding_strategy: FULL_SHARD
-
-  # When saving/loading, write a sharded state dict
   fsdp_state_dict_type: SHARDED_STATE_DICT
-
-  # Sync module parameters across ranks at start
   fsdp_sync_module_states: true
-
-  # Keep “flat” parameters around for faster re-use
   fsdp_use_orig_params: true
