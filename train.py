@@ -2,6 +2,7 @@ import os
 from dataclasses import dataclass, field
 
 import torch
+from torch.distributed.checkpoint.state_dict import get_state_dict, StateDictOptions
 from datasets import load_from_disk  # type: ignore
 from transformers.data.data_collator import DataCollatorWithPadding
 from transformers.hf_argparser import HfArgumentParser
@@ -54,7 +55,14 @@ def main():
     )
 
     trainer.train()
-    trainer.save_model()
+    trainer.save_model(model_args.output_model_filename)
+
+    state_dict, _ = get_state_dict(trainer.model, trainer.optimizer, options=StateDictOptions(full_state_dict=True, cpu_offload=True))
+    trainer.model.module.save_pretrained(
+        model_args.output_model_filename,
+        state_dict=state_dict,
+        safe_serialization=True,
+    )
 
     if torch.distributed.is_initialized():
         torch.distributed.barrier()
