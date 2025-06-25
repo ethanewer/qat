@@ -11,7 +11,7 @@ from vllm import LLM, SamplingParams  # type: ignore
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Generate Qwen3-4B distillation dataset")
+    parser = argparse.ArgumentParser(description="Generate Qwen3 distillation dataset")
     parser.add_argument(
         "--num-examples",
         type=int,
