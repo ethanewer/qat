@@ -1,7 +1,11 @@
 import argparse
 
-import torch
-from datasets import load_dataset  # type: ignore
+from datasets import (  # type: ignore
+    Dataset,
+    DatasetDict,
+    load_dataset,  # type: ignore
+)
+from sklearn.model_selection import train_test_split  # type: ignore
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from vllm import LLM, SamplingParams  # type: ignore
 
@@ -15,12 +19,38 @@ def parse_args():
         help="Maximum number of examples to process from each split (None = all)",
     )
     parser.add_argument(
+        "--test-size",
+        type=float,
+        default=0.05,
+        help="Number of test examples.",
+    )
+    parser.add_argument(
         "--output-file",
         type=str,
-        default="qwen3_4b_data.pt",
+        default="qwen3-4b-data.pt",
         help="Path to save the output PyTorch file",
     )
     return parser.parse_args()
+
+
+def make_dataset(data: list[dict]) -> Dataset:
+    input_ids = []
+    attention_mask = []
+    labels = []
+    for example in data:
+        prompt_ids = example["input_ids"]
+        response_ids = example["output_ids"]
+        input_ids.append(prompt_ids + response_ids)
+        attention_mask.append([1] * len(input_ids[-1]))
+        labels.append([-100] * len(prompt_ids) + response_ids)
+
+    return Dataset.from_dict(
+        {
+            "input_ids": input_ids,
+            "labels": labels,
+            "attention_mask": attention_mask,
+        }
+    )
 
 
 def main():
@@ -38,7 +68,7 @@ def main():
     )
 
     if args.num_examples is not None:
-        formatted_inputs = formatted_inputs[: args.num_example]
+        formatted_inputs = formatted_inputs[: args.num_examples]
 
     model = LLM(
         model="Qwen/Qwen3-4B",
@@ -55,7 +85,7 @@ def main():
         use_tqdm=True,
     )
 
-    processed_responses = [
+    data = [
         {
             "input_text": response.prompt,
             "input_ids": response.prompt_token_ids,
@@ -65,8 +95,20 @@ def main():
         for response in responses
     ]
 
-    torch.save(processed_responses, args.output_file)
-    print(f"Saved {len(processed_responses)} examples to {args.output_file}")
+    train_data, eval_data = train_test_split(
+        data,
+        test_size=args.test_size if args.test_size < 1 else int(args.test_size),
+        random_state=0,
+    )
+
+    dataset = DatasetDict(
+        {
+            "train": make_dataset(train_data),
+            "eval": make_dataset(eval_data),
+        }
+    )
+
+    dataset.save_to_disk("local/qwen3-4b-dataset")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ accelerate launch \
   --local_dir local/qwen3-${size}b \
   --input_model_filename Qwen/Qwen3-${size}B \
   --output_model_filename Qwen/Qwen3-${size}B-${nbits}bit \
-  --train_data_local_path local/qwen3_${size}b_dataset \
+  --train_data_local_path local/qwen3-${size}b-dataset \
   --qat True \
   --nbits $nbits \
   --model_max_length 16384 \
