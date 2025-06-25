@@ -9,17 +9,28 @@ from paretoq_qat import save_qat_model
 def main():
     parser = argparse.ArgumentParser(description="Quantize a model using QAT.")
     parser.add_argument(
-        "--base",
+        "--model-size",
         type=str,
-        required=True,
+        default="4",
+        help="Size if Qwen3 model.",
+    )
+    parser.add_argument(
+        "--base",
+        type=int,
+        default=4,
         help="Base path to the original model directory (e.g., 'local/qwen3-4b/Qwen/Qwen3-4B-4bit')",
     )
     args = parser.parse_args()
-    base = args.base
+    base = f"local/qwen3-4b/Qwen/Qwen3-{args.model_size}B-{args.nbits}bit"
 
     state_dict = {}
     for fname in sorted(os.listdir(base + "-qat")):
         if fname.endswith(".safetensors"):
             state_dict.update(load_file(os.path.join(base + "-qat", fname)))
 
-    save_qat_model(state_dict, "Qwen/Qwen3-4B", base + "-quantized", nbits=4)
+    save_qat_model(
+        state_dict,
+        f"Qwen/Qwen3-{args.model_size}B",
+        base + "-quantized",
+        nbits=args.nbits,
+    )
