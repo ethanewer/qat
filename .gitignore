@@ -5,3 +5,4 @@ local/qwen3-4b*
 local/output/runs/current*
 local/Qwen*
 core
+notebook.ipynb
