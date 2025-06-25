@@ -414,7 +414,7 @@ def update_quantized_linear_inplace(
     weight: Tensor,
     weight_clip_val: Tensor,
     nbits: int,
-    block_size: Optional[int] = None,
+    group_size: Optional[int] = None,
 ) -> None:
     assert isinstance(hqq_linear.meta, dict)
     assert isinstance(hqq_linear.meta["scale"], Tensor)
@@ -423,34 +423,50 @@ def update_quantized_linear_inplace(
 
     data, scale = quantize(weight, weight_clip_val, nbits)
 
-    if block_size is None:
+    if group_size is None:
         extra_dim = 1
     else:
-        extra_dim = data.shape[1] // block_size
-        assert extra_dim * block_size == data.shape[1]
+        extra_dim = data.shape[1] // group_size
+        assert extra_dim * group_size == data.shape[1]
 
     with torch.no_grad():
         new_scale = scale[:, None].expand(scale.shape[0], extra_dim, 1).reshape(-1, 1)
         assert new_scale.shape == hqq_linear.meta["scale"].shape
-        hqq_linear.meta["scale"].set_(new_scale)  # type: ignore
-        hqq_linear.meta["zero"].fill_(-data.min())
+        hqq_linear.meta["scale"].set_(
+            new_scale.to(  # type: ignore
+                hqq_linear.meta["scale"].device,
+                hqq_linear.meta["scale"].dtype,
+            )
+        )
+        hqq_linear.meta["zero"].fill_(
+            -data.min().to(
+                hqq_linear.meta["zero"].device,
+                hqq_linear.meta["zero"].dtype,
+            )
+        )
         new_W_q = Quantizer.pack[hqq_linear.meta["packing"]](  # type: ignore
             (data.view(-1, 64) - data.min()).float()
         )
         assert new_W_q.shape == hqq_linear.W_q.shape
-        hqq_linear.W_q.set_(new_W_q)
+        hqq_linear.W_q.set_(
+            new_W_q.to(
+                hqq_linear.W_q.device,
+                hqq_linear.W_q.dtype,
+            )
+        )
 
 
 def update_quantized_model_with_qat_state_dict(
     model: nn.Module,
     qat_state_dict: dict[str, Tensor],
     nbits: int,
+    group_size: Optional[int] = None,
 ) -> None:
     for name, module in model.named_modules():
         if isinstance(module, HQQLinear):
             weight = qat_state_dict[name + ".weight"]
             weight_clip_val = qat_state_dict[name + ".weight_clip_val"]
-            update_quantized_linear_inplace(module, weight, weight_clip_val, nbits)
+            update_quantized_linear_inplace(module, weight, weight_clip_val, nbits, group_size)
 
 
 def get_quantized_model_from_qat_state_dict(
@@ -473,7 +489,7 @@ def get_quantized_model_from_qat_state_dict(
             skip_modules=skip_modules,
         ),
     )
-    update_quantized_model_with_qat_state_dict(quantized_model, qat_state_dict, nbits)
+    update_quantized_model_with_qat_state_dict(quantized_model, qat_state_dict, nbits, group_size)
     return quantized_model
 
 

@@ -16,8 +16,10 @@ accelerate launch \
   --tf32 False \
   --gradient_checkpointing False \
   \
+  --num_train_epochs 1 \
+  --max_steps 500 \
   --eval_strategy steps \
-  --eval_steps 100 \
+  --eval_steps 50 \
   --save_strategy steps \
   --save_steps 1000 \
   --save_total_limit 100 \
@@ -27,7 +29,6 @@ accelerate launch \
   --weight_decay 0.0 \
   --warmup_ratio 0.0 \
   --lr_scheduler_type cosine \
-  --num_train_epochs 1 \
   --per_device_train_batch_size 4 \
   --per_device_eval_batch_size 4 \
   --gradient_accumulation_steps 1 \

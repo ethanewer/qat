@@ -55,19 +55,31 @@ def main():
     )
 
     trainer.train()
-    trainer.save_model(model_args.output_model_filename)
+
+    print("Saving last checkpoint...")
+    trainer.save_model(model_args.output_model_filename + "-checkpoint")
 
     state_dict, _ = get_state_dict(
         trainer.model,
         trainer.optimizer,  # type: ignore
         options=StateDictOptions(full_state_dict=True, cpu_offload=True),
     )
-    save_qat_model(
-        qat_state_dict=state_dict,  # type: ignore
-        base_model_name=model_args.input_model_filename,
-        save_path=os.path.join(model_args.local_dir, model_args.output_model_filename),
-        nbits=model_args.nbits,
-    )
+    if torch.distributed.get_rank() == 0:
+        print("Saving pretrained QAT model...")
+        trainer.model.module.save_pretrained(  # type: ignore
+            os.path.join(model_args.local_dir, model_args.output_model_filename + "-qat"),
+            state_dict=state_dict,
+            safe_serialization=True,
+        )
+
+        print("Saving pretrained quantized model...")
+        save_qat_model(
+            qat_state_dict=state_dict,  # type: ignore
+            base_model_name=model_args.input_model_filename,
+            save_path=os.path.join(model_args.local_dir, model_args.output_model_filename + "-quantized"),
+            nbits=model_args.nbits,
+        )
+
 
     if torch.distributed.is_initialized():
         torch.distributed.barrier()
