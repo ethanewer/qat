@@ -1,12 +1,15 @@
+nbits=1
+size=4
+
 accelerate launch \
   --config_file fsdp_config.yaml \
   train.py \
-  --local_dir local/qwen3-4b \
-  --input_model_filename Qwen/Qwen3-4B \
-  --output_model_filename Qwen/Qwen3-4B-4bit \
-  --train_data_local_path local/qwen3_4b_dataset \
+  --local_dir local/qwen3-${size}b \
+  --input_model_filename Qwen/Qwen3-${size}B \
+  --output_model_filename Qwen/Qwen3-${size}B-${nbits}bit \
+  --train_data_local_path local/qwen3_${size}b_dataset \
   --qat True \
-  --nbits 4 \
+  --nbits $nbits \
   --model_max_length 16384 \
   \
   --do_train True \
