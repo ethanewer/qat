@@ -399,21 +399,21 @@ def patch_linear_with_qat_linear(
 
 def replace_linear_with_qat_linear(
     module: nn.Module,
-    w_bits: int = 16,
+    nbits: int = 16,
     weight_layerwise: bool = False,
 ) -> None:
     if isinstance(module, nn.Linear):
-        patch_linear_with_qat_linear(module, w_bits, weight_layerwise)
+        patch_linear_with_qat_linear(module, nbits, weight_layerwise)
     else:
         for child in list(module.children()):
-            replace_linear_with_qat_linear(child, w_bits, weight_layerwise)
+            replace_linear_with_qat_linear(child, nbits, weight_layerwise)
 
 
 def update_quantized_linear_inplace(
     hqq_linear: HQQLinear,
     weight: Tensor,
     weight_clip_val: Tensor,
-    w_bits: int,
+    nbits: int,
     block_size: Optional[int] = None,
 ) -> None:
     assert isinstance(hqq_linear.meta, dict)
@@ -421,7 +421,7 @@ def update_quantized_linear_inplace(
     assert isinstance(hqq_linear.meta["zero"], Tensor)
     assert isinstance(hqq_linear.W_q, nn.Parameter)
 
-    data, scale = quantize(weight, weight_clip_val, w_bits)
+    data, scale = quantize(weight, weight_clip_val, nbits)
 
     if block_size is None:
         extra_dim = 1
@@ -444,13 +444,13 @@ def update_quantized_linear_inplace(
 def update_quantized_model_with_qat_state_dict(
     model: nn.Module,
     qat_state_dict: dict[str, Tensor],
-    w_bits: int,
+    nbits: int,
 ) -> None:
     for name, module in model.named_modules():
         if isinstance(module, HQQLinear):
             weight = qat_state_dict[name + ".weight"]
             weight_clip_val = qat_state_dict[name + ".weight_clip_val"]
-            update_quantized_linear_inplace(module, weight, weight_clip_val, w_bits)
+            update_quantized_linear_inplace(module, weight, weight_clip_val, nbits)
 
 
 def get_quantized_model_from_qat_state_dict(
@@ -478,16 +478,16 @@ def get_quantized_model_from_qat_state_dict(
 
 
 def save_qat_model(
-    qat_model: nn.Module,
+    qat_state_dict: dict[str, Tensor],
     base_model_name: str,
-    nbits: int,
     save_path: str,
+    nbits: int,
     vllm_compatible: bool = True,
     torch_dtype: torch.dtype = torch.bfloat16,
     device_map: Any = "cuda",
 ) -> None:
     quantized_model = get_quantized_model_from_qat_state_dict(
-        qat_state_dict=qat_model.state_dict(),
+        qat_state_dict=qat_state_dict,
         base_model_name=base_model_name,
         nbits=nbits,
         group_size=64 if vllm_compatible else None,

@@ -10,7 +10,7 @@ from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from trl import SFTConfig, SFTTrainer  # type: ignore
 
-from paretoq_qat import replace_linear_with_qat_linear
+from paretoq_qat import replace_linear_with_qat_linear, save_qat_model
 
 
 @dataclass
@@ -20,7 +20,7 @@ class ModelArguments:
     output_model_filename: str = field(metadata={"help": "Folder to save the fine-tuned model."})
     train_data_local_path: str = field(metadata={"help": "Path to training data."})
     qat: bool = field(default=False, metadata={"help": "Whether to use QAT."})
-    w_bits: int = field(default=4, metadata={"help": "Bit-width for QAT weight quantization."})
+    nbits: int = field(default=4, metadata={"help": "Bit-width for QAT weight quantization."})
     model_max_length: int = field(default=16384, metadata={"help": "Max sequence length.."})
 
 
@@ -32,7 +32,7 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(model_args.input_model_filename)
     if model_args.qat:
-        replace_linear_with_qat_linear(model, w_bits=model_args.w_bits)
+        replace_linear_with_qat_linear(model, nbits=model_args.nbits)
 
     model.config.use_cache = False
 
@@ -62,10 +62,11 @@ def main():
         trainer.optimizer,  # type: ignore
         options=StateDictOptions(full_state_dict=True, cpu_offload=True),
     )
-    trainer.model.module.save_pretrained(  # type: ignore
-        model_args.output_model_filename,
-        state_dict=state_dict,
-        safe_serialization=True,
+    save_qat_model(
+        qat_state_dict=state_dict,  # type: ignore
+        base_model_name=model_args.input_model_filename,
+        save_path=os.path.join(model_args.local_dir, model_args.output_model_filename),
+        nbits=model_args.nbits,
     )
 
     if torch.distributed.is_initialized():

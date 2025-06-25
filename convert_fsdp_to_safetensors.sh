@@ -6,7 +6,7 @@ accelerate launch \
   --output_model_filename Qwen/Qwen3-4B-4bit \
   --train_data_local_path local/qwen3_4b_dataset \
   --qat True \
-  --w_bits 4 \
+  --nbits 4 \
   --model_max_length 16384 \
   \
   --do_train False \
