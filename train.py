@@ -2,15 +2,15 @@ import os
 from dataclasses import dataclass, field
 
 import torch
-from torch.distributed.checkpoint.state_dict import get_state_dict, StateDictOptions
 from datasets import load_from_disk  # type: ignore
+from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 from transformers.data.data_collator import DataCollatorWithPadding
 from transformers.hf_argparser import HfArgumentParser
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 from trl import SFTConfig, SFTTrainer  # type: ignore
 
-from paretoq_qat import replace_linear_with_quantized_linear
+from paretoq_qat import replace_linear_with_qat_linear
 
 
 @dataclass
@@ -32,7 +32,7 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(model_args.input_model_filename)
     if model_args.qat:
-        replace_linear_with_quantized_linear(model, w_bits=model_args.w_bits)
+        replace_linear_with_qat_linear(model, w_bits=model_args.w_bits)
 
     model.config.use_cache = False
 
@@ -57,8 +57,12 @@ def main():
     trainer.train()
     trainer.save_model(model_args.output_model_filename)
 
-    state_dict, _ = get_state_dict(trainer.model, trainer.optimizer, options=StateDictOptions(full_state_dict=True, cpu_offload=True))
-    trainer.model.module.save_pretrained(
+    state_dict, _ = get_state_dict(
+        trainer.model,
+        trainer.optimizer,  # type: ignore
+        options=StateDictOptions(full_state_dict=True, cpu_offload=True),
+    )
+    trainer.model.module.save_pretrained(  # type: ignore
         model_args.output_model_filename,
         state_dict=state_dict,
         safe_serialization=True,

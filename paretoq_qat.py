@@ -7,7 +7,10 @@ import math
 from typing import Any, Optional
 
 import torch
+from hqq.core.quantize import HQQLinear, Quantizer  # type: ignore
 from torch import Tensor, nn
+from transformers.models.auto.modeling_auto import AutoModelForCausalLM
+from transformers.utils.quantization_config import HqqConfig
 
 
 class LsqBinaryTernaryExtension(torch.autograd.Function):
@@ -246,7 +249,7 @@ class StretchedElasticQuant(torch.autograd.Function):
         return grad_input, grad_alpha, None, None
 
 
-class QuantizeLinear(nn.Linear):
+class QATLinear(nn.Linear):
     def __init__(
         self,
         *kargs,
@@ -294,7 +297,80 @@ class QuantizeLinear(nn.Linear):
 # --------------- NEW ---------------
 
 
-def patch_linear_with_quantized_linear(
+def quantize_lsq_binary_ternary_extension(
+    input: Tensor,
+    alpha: Tensor,
+    num_bits: int,
+) -> tuple[Tensor, Tensor]:
+    if num_bits >= 16:
+        raise NotImplementedError
+
+    if num_bits == 1 or num_bits == 0:
+        Qn = -1
+        Qp = 1
+    else:
+        Qn = -(2 ** (num_bits - 1))
+        Qp = 2 ** (num_bits - 1) - 1
+
+    eps = torch.tensor(0.00001, device=alpha.device).float()
+
+    alpha = torch.where(alpha > eps, alpha, eps)
+
+    if num_bits == 1:
+        q_w = input.sign()
+    else:
+        q_w = (input / alpha).round().clamp(Qn, Qp)
+
+    return q_w, alpha
+
+
+def quantize_stretched_elastic_quant(
+    input: Tensor,
+    alpha: Tensor,
+    num_bits: int,
+) -> tuple[Tensor, Tensor]:
+    if num_bits >= 16:
+        raise NotImplementedError
+
+    eps = torch.tensor(0.00001, device=alpha.device).float()
+    alpha = torch.where(alpha > eps, alpha, eps)
+
+    clip_val = 1 - 1e-2
+    if num_bits == 0:
+        n_levels = 1.5
+        shift = 0
+    else:
+        n_levels = 2 ** (num_bits - 1)
+        shift = 0.5  # type: ignore
+
+    if num_bits == 1:
+        q_w = input.sign()
+    else:
+        q_w = (
+            torch.round(torch.clamp(input / alpha, -clip_val, clip_val) * n_levels - shift) + shift
+        ) / n_levels
+
+    return q_w, alpha
+
+
+def quantize(weight: Tensor, weight_clip_val: Tensor, w_bits: int) -> tuple[Tensor, Tensor]:
+    if w_bits == 2 or w_bits == 0:
+        return quantize_stretched_elastic_quant(
+            weight,
+            weight_clip_val,
+            w_bits,
+        )
+    elif w_bits <= 4:
+        return quantize_lsq_binary_ternary_extension(
+            weight,
+            weight_clip_val,
+            w_bits,
+        )
+    else:
+        raise NotImplementedError
+
+
+def patch_linear_with_qat_linear(
     linear: nn.Linear,
     w_bits: int = 16,
     weight_layerwise: bool = False,
@@ -318,19 +394,107 @@ def patch_linear_with_quantized_linear(
                 scale.to(linear.weight.device, linear.weight.dtype)
             )
 
-    linear.forward = QuantizeLinear.forward.__get__(linear, type(linear))  # type: ignore
+    linear.forward = QATLinear.forward.__get__(linear, type(linear))  # type: ignore
 
 
-def replace_linear_with_quantized_linear(
+def replace_linear_with_qat_linear(
     module: nn.Module,
     w_bits: int = 16,
     weight_layerwise: bool = False,
 ) -> None:
     if isinstance(module, nn.Linear):
-        patch_linear_with_quantized_linear(module, w_bits, weight_layerwise)
+        patch_linear_with_qat_linear(module, w_bits, weight_layerwise)
     else:
         for child in list(module.children()):
-            replace_linear_with_quantized_linear(child, w_bits, weight_layerwise)
+            replace_linear_with_qat_linear(child, w_bits, weight_layerwise)
+
+
+def update_quantized_linear_inplace(
+    hqq_linear: HQQLinear,
+    weight: Tensor,
+    weight_clip_val: Tensor,
+    w_bits: int,
+    block_size: Optional[int] = None,
+) -> None:
+    assert isinstance(hqq_linear.meta, dict)
+    assert isinstance(hqq_linear.meta["scale"], Tensor)
+    assert isinstance(hqq_linear.meta["zero"], Tensor)
+    assert isinstance(hqq_linear.W_q, nn.Parameter)
+
+    data, scale = quantize(weight, weight_clip_val, w_bits)
+
+    if block_size is None:
+        extra_dim = 1
+    else:
+        extra_dim = data.shape[1] // block_size
+        assert extra_dim * block_size == data.shape[1]
+
+    with torch.no_grad():
+        new_scale = scale[:, None].expand(scale.shape[0], extra_dim, 1).reshape(-1, 1)
+        assert new_scale.shape == hqq_linear.meta["scale"].shape
+        hqq_linear.meta["scale"].set_(new_scale)  # type: ignore
+        hqq_linear.meta["zero"].fill_(-data.min())
+        new_W_q = Quantizer.pack[hqq_linear.meta["packing"]](  # type: ignore
+            (data.view(-1, 64) - data.min()).float()
+        )
+        assert new_W_q.shape == hqq_linear.W_q.shape
+        hqq_linear.W_q.set_(new_W_q)
+
+
+def update_quantized_model_with_qat_state_dict(
+    model: nn.Module,
+    qat_state_dict: dict[str, Tensor],
+    w_bits: int,
+) -> None:
+    for name, module in model.named_modules():
+        if isinstance(module, HQQLinear):
+            weight = qat_state_dict[name + ".weight"]
+            weight_clip_val = qat_state_dict[name + ".weight_clip_val"]
+            update_quantized_linear_inplace(module, weight, weight_clip_val, w_bits)
+
+
+def get_quantized_model_from_qat_state_dict(
+    qat_state_dict: dict[str, Tensor],
+    base_model_name: str,
+    nbits: int,
+    group_size: Optional[int] = None,
+    skip_modules: list[str] = ["lm_head"],
+    torch_dtype: torch.dtype = torch.bfloat16,
+    device_map: Any = "cuda",
+) -> Any:
+    quantized_model = AutoModelForCausalLM.from_pretrained(
+        base_model_name,
+        torch_dtype=torch_dtype,
+        device_map=device_map,
+        quantization_config=HqqConfig(
+            nbits=4,
+            group_size=group_size,  # type: ignore
+            axis=1,
+            skip_modules=skip_modules,
+        ),
+    )
+    update_quantized_model_with_qat_state_dict(quantized_model, qat_state_dict, nbits)
+    return quantized_model
+
+
+def save_qat_model(
+    qat_model: nn.Module,
+    base_model_name: str,
+    nbits: int,
+    save_path: str,
+    vllm_compatible: bool = True,
+    torch_dtype: torch.dtype = torch.bfloat16,
+    device_map: Any = "cuda",
+) -> None:
+    quantized_model = get_quantized_model_from_qat_state_dict(
+        qat_state_dict=qat_model.state_dict(),
+        base_model_name=base_model_name,
+        nbits=nbits,
+        group_size=64 if vllm_compatible else None,
+        torch_dtype=torch_dtype,
+        device_map=device_map,
+    )
+    quantized_model.save_pretrained(save_path)
 
 
 # -----------------------------------
