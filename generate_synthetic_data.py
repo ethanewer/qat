@@ -25,10 +25,10 @@ def parse_args():
         help="Number of test examples.",
     )
     parser.add_argument(
-        "--output-file",
+        "--model-size",
         type=str,
-        default="qwen3-4b-data.pt",
-        help="Path to save the output PyTorch file",
+        default="4",
+        help="Size if Qwen3 model.",
     )
     return parser.parse_args()
 
@@ -55,10 +55,14 @@ def make_dataset(data: list[dict]) -> Dataset:
 
 def main():
     args = parse_args()
+    print(args)
+
+    model_name = f"Qwen/Qwen3-{args.model_size}B"
+    print(f"{model_name=}")
 
     ds = load_dataset("nvidia/AceReason-Math", split="train")
 
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
 
     formatted_inputs = tokenizer.apply_chat_template(
         [[{"role": "user", "content": problem}] for problem in ds["problem"]],  # type: ignore
@@ -71,7 +75,7 @@ def main():
         formatted_inputs = formatted_inputs[: args.num_examples]
 
     model = LLM(
-        model="Qwen/Qwen3-4B",
+        model=model_name,
         tensor_parallel_size=4,
         max_num_seqs=256,
         max_num_batched_tokens=131072,
@@ -108,7 +112,7 @@ def main():
         }
     )
 
-    dataset.save_to_disk("local/qwen3-4b-dataset")
+    dataset.save_to_disk(f"local/qwen3-{args.model_size}b-dataset")
 
 
 if __name__ == "__main__":
