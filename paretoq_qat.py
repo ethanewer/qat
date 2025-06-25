@@ -422,14 +422,23 @@ def update_quantized_linear_inplace(
     assert isinstance(hqq_linear.W_q, nn.Parameter)
 
     data, scale = quantize(weight, weight_clip_val, nbits)
+    true_dequantized = data * scale
+    if nbits == 2:
+        data *= 2
+        scale /= 2
+    elif nbits == 1:
+        data /= 2
+        scale *= 2
+    elif nbits == 0:
+        data /= torch.tensor(1 / 1.5, dtype=data.dtype, device=data.device)
+        scale *= torch.tensor(1 / 1.5, dtype=scale.dtype, device=scale.device)
 
     if group_size is None:
-        extra_dim = 1
-    else:
-        extra_dim = data.shape[1] // group_size
-        assert extra_dim * group_size == data.shape[1]
+        group_size = data.shape[1]
 
     with torch.no_grad():
+        extra_dim = data.shape[1] // group_size
+        assert extra_dim * group_size == data.shape[1]
         new_scale = scale[:, None].expand(scale.shape[0], extra_dim, 1).reshape(-1, 1)
         assert new_scale.shape == hqq_linear.meta["scale"].shape
         hqq_linear.meta["scale"].set_(
@@ -445,8 +454,9 @@ def update_quantized_linear_inplace(
             )
         )
         new_W_q = Quantizer.pack[hqq_linear.meta["packing"]](  # type: ignore
-            (data.view(-1, 64) - data.min()).float()
+            (data.view(-1, group_size) - data.min()).float()
         )
+
         assert new_W_q.shape == hqq_linear.W_q.shape
         hqq_linear.W_q.set_(
             new_W_q.to(
@@ -454,6 +464,7 @@ def update_quantized_linear_inplace(
                 hqq_linear.W_q.dtype,
             )
         )
+        assert (true_dequantized == Quantizer.dequantize(hqq_linear.W_q, hqq_linear.meta)).all()
 
 
 def update_quantized_model_with_qat_state_dict(
