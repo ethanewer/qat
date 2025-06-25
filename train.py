@@ -76,10 +76,12 @@ def main():
         save_qat_model(
             qat_state_dict=state_dict,  # type: ignore
             base_model_name=model_args.input_model_filename,
-            save_path=os.path.join(model_args.local_dir, model_args.output_model_filename + "-quantized"),
+            save_path=os.path.join(
+                model_args.local_dir,
+                model_args.output_model_filename + "-quantized",
+            ),
             nbits=model_args.nbits,
         )
-
 
     if torch.distributed.is_initialized():
         torch.distributed.barrier()
