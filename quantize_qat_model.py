@@ -3,7 +3,7 @@ import os
 
 from safetensors.torch import load_file
 
-from paretoq_qat import save_qat_model
+from paretoq_qat import get_quantized_model_from_qat_state_dict
 
 
 def main():
@@ -41,11 +41,12 @@ def main():
         if fname.endswith(".safetensors"):
             state_dict.update(load_file(os.path.join(base + "-qat", fname)))
 
-    save_qat_model(
+    quantized_model = get_quantized_model_from_qat_state_dict(
         state_dict,
         f"Qwen/Qwen3-{args.model_size}B",
-        base + "-quantized",
         nbits=args.nbits,
         qat_group_size=args.qat_group_size,
         hqq_group_size=args.hqq_group_size,
     )
+
+    quantized_model.save_pretrained(base + "-quantized")

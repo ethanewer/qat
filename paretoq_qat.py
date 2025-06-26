@@ -544,26 +544,4 @@ def get_quantized_model_from_qat_state_dict(
     return quantized_model
 
 
-def save_qat_model(
-    qat_state_dict: dict[str, Tensor],
-    base_model_name: str,
-    save_path: str,
-    nbits: int,
-    qat_group_size: Optional[int] = None,
-    hqq_group_size: Optional[int] = None,
-    torch_dtype: torch.dtype = torch.bfloat16,
-    device_map: Any = "cuda",
-) -> None:
-    quantized_model = get_quantized_model_from_qat_state_dict(
-        qat_state_dict=qat_state_dict,
-        base_model_name=base_model_name,
-        nbits=nbits,
-        qat_group_size=qat_group_size,
-        hqq_group_size=hqq_group_size,
-        torch_dtype=torch_dtype,
-        device_map=device_map,
-    )
-    quantized_model.save_pretrained(save_path)
-
-
 # -----------------------------------
