@@ -1,5 +1,6 @@
 import os
 from dataclasses import dataclass, field
+from typing import Optional
 
 import torch
 from datasets import load_from_disk  # type: ignore
@@ -19,9 +20,13 @@ class ModelArguments:
     input_model_filename: str = field(metadata={"help": "Pretrained model identifier or path."})
     output_model_filename: str = field(metadata={"help": "Folder to save the fine-tuned model."})
     train_data_local_path: str = field(metadata={"help": "Path to training data."})
-    qat: bool = field(default=False, metadata={"help": "Whether to use QAT."})
-    nbits: int = field(default=4, metadata={"help": "Bit-width for QAT weight quantization."})
     model_max_length: int = field(default=16384, metadata={"help": "Max sequence length.."})
+    qat: bool = field(default=False, metadata={"help": "Whether to use QAT."})
+    nbits: int = field(default=4, metadata={"help": "Bit-width for quantized weights."})
+    group_size: Optional[int] = field(
+        default=None,
+        metadata={"help": "Group size for quantized weights."},
+    )
 
 
 def main():
@@ -32,7 +37,11 @@ def main():
 
     model = AutoModelForCausalLM.from_pretrained(model_args.input_model_filename)
     if model_args.qat:
-        replace_linear_with_qat_linear(model, nbits=model_args.nbits)
+        replace_linear_with_qat_linear(
+            model,
+            nbits=model_args.nbits,
+            group_size=model_args.group_size,
+        )
 
     model.config.use_cache = False
 

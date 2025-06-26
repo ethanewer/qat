@@ -10,6 +10,7 @@ accelerate launch \
   --train_data_local_path local/qwen3-${size}b-dataset \
   --qat True \
   --nbits $nbits \
+  --group_size 128 \
   --model_max_length 16384 \
   \
   --do_train True \
