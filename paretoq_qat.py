@@ -264,14 +264,12 @@ class QATLinear(nn.Linear):
         self.w_bits = w_bits
         self.group_size = group_size
         self.weight_layerwise = weight_layerwise
-        # params for weight quant
         if self.w_bits < 16:
             num_blocks = 1 if group_size is None else self.weight.shape[1] // group_size
             self.weight_clip_val = nn.Parameter(torch.Tensor(self.weight.shape[0] * num_blocks, 1))
 
     def forward(self, input: Tensor) -> Tensor:
-        # quantize weight
-        assert len(self.weight.size()) == 2
+        assert self.weight.ndim == 2
         real_weights = self.weight
         weight_shape = real_weights.shape
         if self.group_size is not None:
@@ -496,6 +494,22 @@ def update_quantized_model_with_qat_state_dict(
                 nbits=nbits,
                 qat_group_size=qat_group_size,
                 hqq_group_size=hqq_group_size,
+            )
+
+
+def replace_linear_with_hqq_linear(
+    model: nn.Module,
+    quant_config: dict,
+    device: str,
+    compute_dtype: torch.dtype,
+) -> None:
+    for name, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            parent = model.get_submodule(".".join(name.split(".")[:-1]))
+            setattr(
+                parent,
+                name.split(".")[-1],
+                HQQLinear(module, quant_config, device=device, compute_dtype=compute_dtype),
             )
 
 
