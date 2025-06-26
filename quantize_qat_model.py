@@ -16,8 +16,8 @@ def main():
     )
     parser.add_argument(
         "--base",
-        type=int,
-        default=4,
+        type=str,
+        required=True,
         help="Base path to the original model directory (e.g., 'local/qwen3-4b/Qwen/Qwen3-4B-4bit')",
     )
     parser.add_argument(
