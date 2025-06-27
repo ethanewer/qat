@@ -15,10 +15,10 @@ def main():
         help="Size if Qwen3 model.",
     )
     parser.add_argument(
-        "--base",
-        type=str,
+        "--nbits",
+        type=int,
         required=True,
-        help="Base path to the original model directory (e.g., 'local/qwen3-4b/Qwen/Qwen3-4B-4bit')",
+        help="Bit-width for quantized weights.",
     )
     parser.add_argument(
         "--qat-group-size",
@@ -34,7 +34,7 @@ def main():
     )
 
     args = parser.parse_args()
-    base = f"local/qwen3-4b/Qwen/Qwen3-{args.model_size}B-{args.nbits}bit"
+    base = f"local/qwen3-{args.model_size}b/Qwen/Qwen3-{args.model_size}B-{args.nbits}bit"
 
     state_dict = {}
     for fname in sorted(os.listdir(base + "-qat")):
@@ -50,3 +50,7 @@ def main():
     )
 
     quantized_model.save_pretrained(base + "-quantized")
+
+
+if __name__ == "__main__":
+    main()

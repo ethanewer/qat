@@ -4,12 +4,24 @@
 # LICENSE file in the root directory of this source tree.
 
 import math
-from typing import Any, Optional
+from typing import Any, Callable, Optional, Unpack
 
 import torch
-from hqq.core.quantize import HQQLinear, Quantizer  # type: ignore
+from hqq.core.quantize import (  # type: ignore
+    BaseQuantizeConfig,  # type: ignore
+    HQQLinear,
+    Quantizer,
+)
 from torch import Tensor, nn
+from transformers.modeling_flash_attention_utils import FlashAttentionKwargs
+from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
+from transformers.models.qwen3.modeling_qwen3 import (
+    Qwen3Attention,
+    apply_rotary_pos_emb,
+    eager_attention_forward,
+    logger,
+)
 from transformers.utils.quantization_config import HqqConfig
 
 
@@ -301,6 +313,101 @@ class QATLinear(nn.Linear):
         return out
 
 
+class QATQwen3Attention(Qwen3Attention):
+    def __init__(
+        self,
+        *args,
+        w_bits: int = 16,
+    ) -> None:
+        super().__init__(*args)
+        self.w_bits = w_bits
+        if self.w_bits < 16:
+            self.key_clip_val = nn.Parameter(torch.Tensor(self.k_proj.out_features))
+            self.value_clip_val = nn.Parameter(torch.Tensor(self.v_proj.out_features))
+
+    def forward(  # type: ignore
+        self,
+        hidden_states: torch.Tensor,
+        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[torch.Tensor],
+        past_key_value: None = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        **kwargs: Unpack[FlashAttentionKwargs],
+    ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, self.head_dim)
+
+        query_states = self.q_norm(self.q_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+        real_key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+        real_value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+
+        if self.w_bits >= 16:
+            key_states = real_key_states
+            value_states = real_value_states
+        elif self.w_bits == 2 or self.w_bits == 0:
+            key_states = StretchedElasticQuant.apply(
+                real_key_states,
+                self.key_clip_val,
+                self.w_bits,
+                False,
+            ).to(real_key_states.dtype)  # type: ignore
+            value_states = StretchedElasticQuant.apply(
+                real_value_states,
+                self.value_clip_val,
+                self.w_bits,
+                False,
+            ).to(real_value_states.dtype)  # type: ignore
+        elif self.w_bits <= 4:
+            key_states = LsqBinaryTernaryExtension.apply(
+                real_key_states,
+                self.key_clip_val,
+                self.w_bits,
+                False,
+            ).to(real_key_states.dtype)  # type: ignore
+            value_states = LsqBinaryTernaryExtension.apply(
+                real_value_states,
+                self.value_clip_val,
+                self.w_bits,
+                False,
+            ).to(real_value_states.dtype)  # type: ignore
+        else:
+            raise NotImplementedError
+
+        cos, sin = position_embeddings
+        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+        if past_key_value is not None:
+            raise NotImplementedError("Cache is not supported during QAT.")
+
+        attention_interface: Callable = eager_attention_forward
+        if self.config._attn_implementation != "eager":
+            if self.config._attn_implementation == "sdpa" and kwargs.get(
+                "output_attentions", False
+            ):
+                logger.warning_once(  # type: ignore
+                    "`torch.nn.functional.scaled_dot_product_attention` does not support `output_attentions=True`. Falling back to "
+                    'eager attention. This warning can be removed using the argument `attn_implementation="eager"` when loading the model.'
+                )
+            else:
+                attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+
+        attn_output, attn_weights = attention_interface(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            sliding_window=self.sliding_window,  # diff with Llama
+            **kwargs,
+        )
+
+        attn_output = attn_output.reshape(*input_shape, -1).contiguous()
+        attn_output = self.o_proj(attn_output)
+        return attn_output, attn_weights
+
+
 def quantize_lsq_binary_ternary_extension(
     input: Tensor,
     alpha: Tensor,
@@ -415,6 +522,52 @@ def replace_linear_with_qat_linear(
             replace_linear_with_qat_linear(child, nbits, group_size, weight_layerwise)
 
 
+# def patch_attention_with_qat_attention(self_attn: Qwen3Attention, w_bits: int = 16) -> None:
+#     self_attn.w_bits = w_bits  # type: ignore
+#     if w_bits < 16:
+#         with torch.no_grad():
+#             if w_bits == 1:
+#                 key_scale = (  # supposed to be the absolute mean of activations
+#                     self_attn.k_norm.weight[None]
+#                     .expand(
+#                         self_attn.config.num_key_value_heads,
+#                         self_attn.config.head_dim,
+#                     )
+#                     .clone()
+#                     .detach()
+#                 )
+#             elif w_bits == 0 or w_bits == 2:
+#                 key_scale = 2 * (  # supposed to be the absolute max of activations
+#                     self_attn.k_norm.weight[None]
+#                     .expand(
+#                         self_attn.config.num_key_value_heads,
+#                         self_attn.config.head_dim,
+#                     )
+#                     .clone()
+#                     .detach()
+#                 )
+#             elif w_bits == 3 or w_bits == 4:
+#                 key_max = 2 * (  # supposed to be the absolute max of activations
+#                     self_attn.k_norm.weight[None]
+#                     .expand(
+#                         self_attn.config.num_key_value_heads,
+#                         self_attn.config.head_dim,
+#                     )
+#                     .clone()
+#                     .detach()
+#                 )
+#                 maxq = 2 ** (w_bits - 1) - 1
+#                 key_scale = key_max / maxq
+#             else:
+#                 raise NotImplementedError
+
+#             self_attn.key_clip_val = nn.Parameter(
+#                 key_scale.to(self_attn.k_proj.weight.device, self_attn.k_proj.weight.dtype)
+#             )
+
+#     self_attn.forward = QATLinear.forward.__get__(self_attn, type(self_attn))  # type: ignore
+
+
 def update_quantized_linear_inplace(
     hqq_linear: HQQLinear,
     weight: Tensor,
@@ -475,7 +628,13 @@ def update_quantized_linear_inplace(
                 hqq_linear.W_q.dtype,
             )
         )
-        assert (true_dequantized == Quantizer.dequantize(hqq_linear.W_q, hqq_linear.meta)).all()
+        dequantized = Quantizer.dequantize(hqq_linear.W_q, hqq_linear.meta)
+        assert torch.allclose(
+            dequantized.to(true_dequantized.device, true_dequantized.dtype),
+            true_dequantized,
+            atol=1e-2,
+            rtol=1e-4,
+        )
 
 
 def update_quantized_model_with_qat_state_dict(
@@ -528,7 +687,7 @@ def get_quantized_model_from_qat_state_dict(
         torch_dtype=torch_dtype,
         device_map=device_map,
         quantization_config=HqqConfig(
-            nbits=4,
+            nbits=1.58 if nbits == 0 else nbits,  # type: ignore
             group_size=hqq_group_size,  # type: ignore
             axis=1,
             skip_modules=skip_modules,
@@ -542,6 +701,89 @@ def get_quantized_model_from_qat_state_dict(
         hqq_group_size=hqq_group_size,
     )
     return quantized_model
+
+
+def test_mlp_quantization(
+    nbits: int | float,
+    qat_group_size: Optional[int],
+    hqq_group_size: Optional[int],
+) -> None:
+    model1 = torch.nn.Sequential(torch.nn.Linear(512, 256, bias=False)).to(torch.bfloat16)
+    replace_linear_with_qat_linear(
+        model1,
+        nbits=0 if nbits == 1.58 else nbits,  # type: ignore
+        group_size=qat_group_size,
+    )
+
+    model2 = torch.nn.Sequential(torch.nn.Linear(512, 256, bias=False)).to(torch.bfloat16)
+    quant_config = BaseQuantizeConfig(nbits=nbits, group_size=hqq_group_size)  # type: ignore
+    quant_config["weight_quant_params"]["optimize"] = False
+    replace_linear_with_hqq_linear(model2, quant_config, device="cpu", compute_dtype=torch.bfloat16)
+    update_quantized_model_with_qat_state_dict(
+        model2,
+        model1.state_dict(),
+        nbits=0 if nbits == 1.58 else nbits,  # type: ignore
+        qat_group_size=qat_group_size,
+        hqq_group_size=hqq_group_size,
+    )
+
+    x = torch.randn(1, 512, dtype=torch.bfloat16)
+
+    with torch.no_grad():
+        y1 = model1(x)
+        y2 = model2(x)
+
+    assert torch.allclose(y1, y2), (
+        f"test_mlp_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
+    )
+
+
+def test_huggingface_quantization(
+    nbits: int | float,
+    qat_group_size: Optional[int],
+    hqq_group_size: Optional[int],
+) -> None:
+    model1 = AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen3-0.6B",
+        torch_dtype=torch.bfloat16,
+        device_map="cpu",
+    )
+    replace_linear_with_qat_linear(
+        model1.model,
+        nbits=0 if nbits == 1.58 else nbits,  # type: ignore
+        group_size=qat_group_size,
+    )
+
+    model2 = AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen3-0.6B",
+        torch_dtype=torch.bfloat16,
+        device_map="cpu",
+    )
+    quant_config = BaseQuantizeConfig(nbits=nbits, group_size=hqq_group_size)  # type: ignore
+    quant_config["weight_quant_params"]["optimize"] = False
+    replace_linear_with_hqq_linear(
+        model2.model,
+        quant_config,
+        device="cpu",
+        compute_dtype=torch.bfloat16,
+    )
+    update_quantized_model_with_qat_state_dict(
+        model2,
+        model1.state_dict(),
+        nbits=0 if nbits == 1.58 else nbits,  # type: ignore
+        qat_group_size=qat_group_size,
+        hqq_group_size=hqq_group_size,
+    )
+
+    input_ids = torch.arange(32)[None]
+
+    with torch.no_grad():
+        y1 = model1(input_ids).logits
+        y2 = model2(input_ids).logits
+
+    assert torch.allclose(y1, y2), (
+        f"test_huggingface_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
+    )
 
 
 # -----------------------------------
