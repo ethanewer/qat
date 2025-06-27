@@ -1,4 +1,5 @@
 import argparse
+import pickle
 
 from datasets import (  # type: ignore
     Dataset,
@@ -19,10 +20,16 @@ def parse_args():
         help="Size if Qwen3 model.",
     )
     parser.add_argument(
-        "--num-examples",
+        "--num-questions",
         type=int,
         default=None,
-        help="Maximum number of examples to process from each split (None = all)",
+        help="Maximum number of questions to process from each split (None = all)",
+    )
+    parser.add_argument(
+        "--num-outputs",
+        type=int,
+        default=1,
+        help="Number of outputs generated for each question.",
     )
     parser.add_argument(
         "--test-size",
@@ -71,8 +78,8 @@ def main():
         enable_thinking=True,
     )
 
-    if args.num_examples is not None:
-        formatted_inputs = formatted_inputs[: args.num_examples]
+    if args.num_questions is not None:
+        formatted_inputs = formatted_inputs[: args.num_questions]
 
     model = LLM(
         model=model_name,
@@ -81,7 +88,7 @@ def main():
         max_num_batched_tokens=131072,
         gpu_memory_utilization=0.9,
     )
-    sampling_params = SamplingParams(max_tokens=16384)
+    sampling_params = SamplingParams(max_tokens=16384, n=args.num_outputs)
 
     responses = model.generate(
         prompts=formatted_inputs,
@@ -89,15 +96,20 @@ def main():
         use_tqdm=True,
     )
 
-    data = [
-        {
-            "input_text": response.prompt,
-            "input_ids": response.prompt_token_ids,
-            "output_text": response.outputs[0].text,
-            "output_ids": response.outputs[0].token_ids,
-        }
-        for response in responses
-    ]
+    data = []
+    for response in responses:
+        for output in response.outputs:
+            data.append(
+                {
+                    "input_text": response.prompt,
+                    "input_ids": response.prompt_token_ids,
+                    "output_text": output.text,
+                    "output_ids": output.token_ids,
+                }
+            )
+
+    with open(f"local/qwen3-{args.model_size}b-outputs.pkl", "wb") as f:
+        pickle.dump(data, f)
 
     train_data, eval_data = train_test_split(
         data,
