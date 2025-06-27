@@ -1,5 +1,5 @@
 nbits=4
-size=0.6
+size=4
 
 accelerate launch \
   --config_file fsdp_config.yaml \
@@ -20,21 +20,19 @@ accelerate launch \
   --tf32 False \
   --gradient_checkpointing False \
   \
-  --num_train_epochs 1 \
+  --num_train_epochs 2 \
   --eval_strategy steps \
   --eval_steps 50 \
-  --save_strategy steps \
-  --save_steps 1000 \
-  --save_total_limit 100 \
+  --save_strategy epoch \
   --logging_strategy steps \
   --logging_steps 1 \
   --learning_rate 2e-5 \
   --weight_decay 0.0 \
   --warmup_ratio 0.0 \
   --lr_scheduler_type cosine \
-  --per_device_train_batch_size 16 \
-  --per_device_eval_batch_size 16 \
-  --gradient_accumulation_steps 1 \
+  --per_device_train_batch_size 4 \
+  --per_device_eval_batch_size 4 \
+  --gradient_accumulation_steps 4 \
   --report_to tensorboard \
   --logging_dir local/output/runs/current \
   --disable_tqdm False
