@@ -36,3 +36,5 @@ accelerate launch \
   --report_to tensorboard \
   --logging_dir local/output/runs/current \
   --disable_tqdm False
+
+python quantize_qat_model.py --model-size=$size --nbits=$nbits
