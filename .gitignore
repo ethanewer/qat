@@ -6,3 +6,4 @@ local/output/runs/current*
 local/Qwen*
 core
 notebook.ipynb
+old*
