@@ -13,6 +13,12 @@ from vllm import LLM, SamplingParams  # type: ignore
 def parse_args():
     parser = argparse.ArgumentParser(description="Generate Qwen3 distillation dataset")
     parser.add_argument(
+        "--model-size",
+        type=str,
+        required=True,
+        help="Size if Qwen3 model.",
+    )
+    parser.add_argument(
         "--num-examples",
         type=int,
         default=None,
@@ -21,14 +27,8 @@ def parse_args():
     parser.add_argument(
         "--test-size",
         type=float,
-        default=0.05,
+        default=512,
         help="Number of test examples.",
-    )
-    parser.add_argument(
-        "--model-size",
-        type=str,
-        default="4",
-        help="Size if Qwen3 model.",
     )
     return parser.parse_args()
 
