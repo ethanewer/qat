@@ -1,5 +1,5 @@
-nbits=1
-size=4
+nbits=4
+size=0.6
 
 accelerate launch \
   --config_file fsdp_config.yaml \
@@ -10,6 +10,7 @@ accelerate launch \
   --train_data_local_path local/qwen3-${size}b-dataset \
   --qat True \
   --nbits $nbits \
+  --group_size 128 \
   --model_max_length 16384 \
   \
   --do_train True \
@@ -20,7 +21,6 @@ accelerate launch \
   --gradient_checkpointing False \
   \
   --num_train_epochs 1 \
-  --max_steps 500 \
   --eval_strategy steps \
   --eval_steps 50 \
   --save_strategy steps \
@@ -32,8 +32,8 @@ accelerate launch \
   --weight_decay 0.0 \
   --warmup_ratio 0.0 \
   --lr_scheduler_type cosine \
-  --per_device_train_batch_size 4 \
-  --per_device_eval_batch_size 4 \
+  --per_device_train_batch_size 16 \
+  --per_device_eval_batch_size 16 \
   --gradient_accumulation_steps 1 \
   --report_to tensorboard \
   --logging_dir local/output/runs/current \

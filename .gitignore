@@ -1,9 +1,8 @@
 __pycache__*
 local/*.pt
-local/qwen3_4b_dataset
-local/qwen3-4b*
-local/output/runs/current*
+local/qwen*
 local/Qwen*
+local/output/runs/current*
 core
 notebook.ipynb
 old*
