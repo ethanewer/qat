@@ -26,16 +26,16 @@ def parse_args():
         help="Maximum number of questions to process from each split (None = all)",
     )
     parser.add_argument(
+        "--num-test-questions",
+        type=int,
+        default=512,
+        help="Number of test questions.",
+    )
+    parser.add_argument(
         "--num-outputs",
         type=int,
         default=1,
         help="Number of outputs generated for each question.",
-    )
-    parser.add_argument(
-        "--test-size",
-        type=float,
-        default=512,
-        help="Number of test examples.",
     )
     return parser.parse_args()
 
@@ -96,10 +96,28 @@ def main():
         use_tqdm=True,
     )
 
-    data = []
-    for response in responses:
+    train_responses, eval_responses = train_test_split(
+        responses,
+        test_size=args.num_test_questions,
+        random_state=0,
+    )
+
+    train_data = []
+    for response in train_responses:
         for output in response.outputs:
-            data.append(
+            train_data.append(
+                {
+                    "input_text": response.prompt,
+                    "input_ids": response.prompt_token_ids,
+                    "output_text": output.text,
+                    "output_ids": output.token_ids,
+                }
+            )
+
+    eval_data = []
+    for response in eval_responses:
+        for output in response.outputs:
+            eval_data.append(
                 {
                     "input_text": response.prompt,
                     "input_ids": response.prompt_token_ids,
@@ -109,13 +127,7 @@ def main():
             )
 
     with open(f"local/qwen3-{args.model_size}b-outputs.pkl", "wb") as f:
-        pickle.dump(data, f)
-
-    train_data, eval_data = train_test_split(
-        data,
-        test_size=args.test_size if args.test_size < 1 else int(args.test_size),
-        random_state=0,
-    )
+        pickle.dump({"train": train_data, "eval": eval_data}, f)
 
     dataset = DatasetDict(
         {
