@@ -10,7 +10,7 @@ from transformers.hf_argparser import HfArgumentParser
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from trl import SFTConfig, SFTTrainer  # type: ignore
 
-from paretoq_qat import replace_linear_with_qat_linear
+from qat import replace_linear_with_qat_linear
 
 
 @dataclass

@@ -3,7 +3,7 @@ import os
 
 from safetensors.torch import load_file
 
-from paretoq_qat import get_quantized_model_from_qat_state_dict
+from qat import get_quantized_model_from_qat_state_dict
 
 
 def main():
