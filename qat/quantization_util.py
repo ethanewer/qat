@@ -38,7 +38,7 @@ class LsqBinaryTernaryExtension(torch.autograd.Function):
             Qn = -1
             Qp = 1
         else:
-            Qn = -(2 ** (nbits - 1))
+            Qn = -(2 ** (nbits - 1)) + 1
             Qp = 2 ** (nbits - 1) - 1
 
         eps = torch.tensor(0.00001, device=alpha.device).float()
@@ -226,7 +226,7 @@ def quantize_lsq_binary_ternary_extension(
         Qn = -1
         Qp = 1
     else:
-        Qn = -(2 ** (nbits - 1))
+        Qn = -(2 ** (nbits - 1)) + 1
         Qp = 2 ** (nbits - 1) - 1
 
     eps = torch.tensor(0.00001, device=alpha.device).float()

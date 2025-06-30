@@ -6,6 +6,7 @@ from hqq.core.quantize import Quantizer  # type: ignore
 from torch import Tensor, nn
 from transformers.cache_utils import DynamicCache
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.models.qwen3.modeling_qwen3 import (
     Qwen3Attention,
     Qwen3ForCausalLM,
@@ -123,8 +124,8 @@ def patch_attention_with_qat_attention(
     if nbits < 16:
         with torch.no_grad():
             if nbits == 1:
-                key_scale = key_states.abs().mean(dim=(0, 1), keepdim=True).detach()
-                value_scale = value_states.abs().mean(dim=(0, 1), keepdim=True).detach()
+                key_scale = key_states.abs().mean(dim=(0, 2), keepdim=True).detach()
+                value_scale = value_states.abs().mean(dim=(0, 2), keepdim=True).detach()
             elif nbits == 0 or nbits == 2:
                 key_scale = key_states.abs().max(dim=0, keepdim=True)[0].max(dim=2, keepdim=True)[0].detach()
                 value_scale = value_states.abs().max(dim=0, keepdim=True)[0].max(dim=2, keepdim=True)[0].detach()
@@ -175,6 +176,7 @@ class QATQuantizedCache(DynamicCache):
         qat_model: Qwen3ForCausalLM,
     ) -> None:
         super().__init__()
+        assert nbits != 1, "nbits=1 is not supported yet."
         self.nbits = nbits
         self.num_key_value_heads = qat_model.config.num_key_value_heads
         self.head_dim = qat_model.config.head_dim
@@ -214,12 +216,10 @@ class QATQuantizedCache(DynamicCache):
                 self.value_cache[layer_idx] = self.quantize(value_states, self.value_meta[layer_idx])
 
         # return key_states, value_states
-        print(f"{self.key_cache[layer_idx].shape=}")
         out = (
             self.dequantize(self.key_cache[layer_idx], self.key_meta[layer_idx]),
             self.dequantize(self.value_cache[layer_idx], self.value_meta[layer_idx]),
         )
-        print(f"{out[0].shape=}")
         return out
 
     def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
@@ -232,14 +232,13 @@ class QATQuantizedCache(DynamicCache):
         return self._seen_tokens if layer_idx == 0 else self._seen_tokens - 1
 
     def quantize(self, tensor: Tensor, meta: dict) -> Tensor:
-        tensor = tensor.transpose(1, 2).view(-1, self.num_key_value_heads * self.head_dim)
-        meta["shape_without_padding"] = tensor.shape
+        meta["batch_size"] = tensor.shape[0]
+        tensor = tensor.transpose(1, 2).reshape(-1, self.num_key_value_heads * self.head_dim)
 
-        padding = -tensor.shape[0] % 8
-        tensor = F.pad(tensor, (0, 0, 0, padding), value=0)
+        data, _ = quantize(tensor, meta["clip_val"], self.nbits)
+        meta["shape_without_padding"] = data.shape
+        # true_dequantized = data * meta["clip_val"]
 
-        data, meta["scale"] = quantize(tensor, meta["scale"], self.nbits)
-        true_dequantized = (data * meta["scale"]).view(meta["shape"])
         if self.nbits == 2:
             data *= 2
         elif self.nbits == 1:
@@ -247,29 +246,28 @@ class QATQuantizedCache(DynamicCache):
         elif self.nbits == 0:
             data /= torch.tensor(1 / 1.5, dtype=data.dtype, device=data.device)
 
-        quant_min = get_quant_min(self.nbits)
+        data -= get_quant_min(self.nbits)
 
-        q_tensor = Quantizer.pack[meta["packing"]](
-            (data.view(-1, self.num_key_value_heads * self.head_dim) - quant_min).float()
-        )
+        padding = -data.shape[0] % 8
+        data = F.pad(data, (0, 0, 0, padding), value=0)
 
-        dequantized = Quantizer.dequantize(q_tensor, meta)
-        print(true_dequantized.shape)
-        print(dequantized.shape)
-        assert torch.allclose(
-            dequantized.to(true_dequantized.device, true_dequantized.dtype),
-            true_dequantized,
-            atol=1e-2,
-            rtol=1e-4,
-        )
+        return Quantizer.pack[meta["packing"]](data.float())
+        # q_tensor = Quantizer.pack[meta["packing"]](data.float())
+        # dequantized = Quantizer.dequantize(q_tensor, meta)[: true_dequantized.shape[0]]
+        # assert torch.allclose(
+        #     dequantized.to(true_dequantized.device, true_dequantized.dtype),
+        #     true_dequantized,
+        #     atol=1e-2,
+        #     rtol=1e-4,
+        # )
 
-        return q_tensor
+        # return q_tensor
 
     def dequantize(self, q_tensor: Tensor, meta: dict) -> Tensor:
         tensor = Quantizer.dequantize(q_tensor, meta)
         assert tensor.shape[1] == meta["shape_without_padding"][1]
         tensor = tensor[: meta["shape_without_padding"][0]]
-        return tensor.view(-1, self._seen_tokens, self.num_key_value_heads, self.head_dim).transpose(1, 2)
+        return tensor.view(meta["batch_size"], -1, self.num_key_value_heads, self.head_dim).transpose(1, 2)
 
     def get_hqq_meta(self, clip_val: Tensor) -> dict:
         nbits = 1.58 if self.nbits == 0 else self.nbits
@@ -285,18 +283,73 @@ class QATQuantizedCache(DynamicCache):
             "quant_zero": False,
             "compute_dtype": torch.bfloat16,
         }
-
-        scale = clip_val.view(1, -1)  # type: ignore
+        clip_val = clip_val.view(1, -1)
+        meta["clip_val"] = clip_val
         if nbits == 2:
-            scale /= 2
+            scale = clip_val / 2
         elif nbits == 1:
-            scale *= 2
-        elif nbits == 0:
-            scale *= torch.tensor(1 / 1.5, dtype=scale.dtype, device=scale.device)
+            scale = clip_val * 2
+        elif nbits == 1.58:
+            scale = clip_val * torch.tensor(1 / 1.5, dtype=clip_val.dtype, device=clip_val.device)
+        else:
+            scale = clip_val
 
-        zero = torch.full_like(scale, -get_quant_min(self.nbits))
-
+        zero = torch.full_like(clip_val, -get_quant_min(self.nbits))
         meta["scale"] = scale
         meta["zero"] = zero
 
         return meta
+
+
+def test_kv_cache_quant(nbits: int | float, seq_len: int = 8, test_equal: bool = True) -> None:
+    if nbits == 1.58:
+        nbits = 0
+
+    inputs = {"input_ids": torch.arange(seq_len)[None], "attention_mask": torch.ones(1, seq_len, dtype=torch.long)}
+
+    model1 = AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen3-0.6B",
+        torch_dtype=torch.bfloat16,
+        device_map="cpu",
+    )
+    replace_attention_with_qat_attention(model1, inputs, nbits=nbits)  # type: ignore
+
+    model2 = AutoModelForCausalLM.from_pretrained(
+        "Qwen/Qwen3-0.6B",
+        torch_dtype=torch.bfloat16,
+        device_map="cpu",
+    )
+
+    with torch.no_grad():
+        y1 = model1(**inputs).logits
+
+    quant_cache = QATQuantizedCache(nbits=nbits, qat_model=model1)  # type: ignore
+    with torch.no_grad():
+        y2 = model2(**inputs, past_key_values=quant_cache).logits
+
+    quant_cache = QATQuantizedCache(nbits=nbits, qat_model=model1)  # type: ignore
+    logits3_list = []
+    for i in range(inputs["input_ids"].shape[1]):
+        with torch.no_grad():
+            logits3_list.append(
+                model2(
+                    input_ids=inputs["input_ids"][:, [i]],
+                    attention_mask=inputs["attention_mask"][:, : i + 1],
+                    past_key_values=quant_cache,
+                ).logits
+            )
+
+    y3 = torch.concat(logits3_list, dim=1)
+
+    if test_equal:
+        assert (y1 == y2).all(), f"test_mlp_quantization({nbits=}) failed."
+        assert (y1 == y3).all(), f"test_mlp_quantization({nbits=}) failed."
+    else:
+        if not torch.allclose(y1, y2, atol=1e-2, rtol=1e-4):
+            print(y1)
+            print(y2)
+        assert torch.allclose(y1, y2, atol=1e-2, rtol=1e-4), f"test_huggingface_quantization({nbits=}) failed."
+        if not torch.allclose(y1, y3, atol=1e-2, rtol=1e-4):
+            print(y1)
+            print(y3)
+        assert torch.allclose(y1, y3, atol=1e-2, rtol=1e-4), f"test_huggingface_quantization({nbits=}) failed."

@@ -250,6 +250,7 @@ def test_mlp_quantization(
     nbits: int | float,
     qat_group_size: Optional[int],
     hqq_group_size: Optional[int],
+    test_equal: bool = True,
 ) -> None:
     model1 = torch.nn.Sequential(torch.nn.Linear(512, 256, bias=False)).to(torch.bfloat16)
     replace_linear_with_qat_linear(
@@ -276,13 +277,17 @@ def test_mlp_quantization(
         y1 = model1(x)
         y2 = model2(x)
 
-    assert torch.allclose(y1, y2), f"test_mlp_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
+    if test_equal:
+        assert (y1 == y2).all(), f"test_mlp_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
+    else:
+        assert torch.allclose(y1, y2), f"test_huggingface_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
 
 
 def test_huggingface_quantization(
     nbits: int | float,
     qat_group_size: Optional[int],
     hqq_group_size: Optional[int],
+    test_equal: bool = True,
 ) -> None:
     model1 = AutoModelForCausalLM.from_pretrained(
         "Qwen/Qwen3-0.6B",
@@ -322,4 +327,7 @@ def test_huggingface_quantization(
         y1 = model1(input_ids).logits
         y2 = model2(input_ids).logits
 
-    assert torch.allclose(y1, y2), f"test_huggingface_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
+    if test_equal:
+        assert (y1 == y2).all(), f"test_mlp_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
+    else:
+        assert torch.allclose(y1, y2), f"test_huggingface_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
