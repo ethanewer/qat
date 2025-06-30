@@ -11,7 +11,7 @@ accelerate launch \
   --qat True \
   --nbits $nbits \
   --group_size 128 \
-  --model_max_length 16384 \
+  --model_max_length 32768 \
   \
   --do_train True \
   --do_eval False \
@@ -20,9 +20,9 @@ accelerate launch \
   --tf32 False \
   --gradient_checkpointing False \
   \
-  --num_train_epochs 2 \
-  --eval_strategy steps \
-  --eval_steps 50 \
+  --num_train_examples 131072 \
+  --num_train_epochs 1 \
+  --eval_strategy no \
   --save_strategy epoch \
   --logging_strategy steps \
   --logging_steps 1 \

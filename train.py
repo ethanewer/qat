@@ -3,8 +3,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
-from datasets import load_from_disk  # type: ignore
-from torch import Tensor
+from datasets import load_dataset  # type: ignore
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 from transformers.hf_argparser import HfArgumentParser
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
@@ -18,7 +17,11 @@ class ModelArguments:
     local_dir: str = field(metadata={"help": "Directory where outputs are saved and loaded from."})
     input_model_filename: str = field(metadata={"help": "Pretrained model identifier or path."})
     output_model_filename: str = field(metadata={"help": "Folder to save the fine-tuned model."})
-    train_data_local_path: str = field(metadata={"help": "Path to training data."})
+    num_train_examples: str = field(metadata={"help": "Number of training examples."})
+    num_eval_examples: Optional[str] = field(
+        default=None,
+        metadata={"help": "Number of eval examples."},
+    )
     model_max_length: int = field(default=16384, metadata={"help": "Max sequence length.."})
     qat: bool = field(default=False, metadata={"help": "Whether to use QAT."})
     nbits: int = field(default=4, metadata={"help": "Bit-width for quantized weights."})
@@ -28,14 +31,14 @@ class ModelArguments:
     )
 
 
-def padding_collator(features: list[dict[str, list[int]]]) -> dict[str, Tensor]:
-    first = features[0]
-    batch = {}
-    for k, v in first.items():
-        sequences = [torch.tensor(f[k]) for f in features]
-        batch[k] = torch.nn.utils.rnn.pad_sequence(sequences, batch_first=True, padding_value=0)
-
-    return batch
+def preprocess(batch: dict[str, list[str]]) -> dict[str, list[dict[str, str]]]:
+    n = len(batch["instruction_seed"])
+    return {
+        "instruction": [
+            {"prompt": batch["instruction_seed"][i], "completion": batch["output"][i]}
+            for i in range(n)
+        ]
+    }
 
 
 def main():
@@ -55,16 +58,40 @@ def main():
 
     model.config.use_cache = False
 
-    dataset = load_from_disk(model_args.train_data_local_path)
-    train_dataset = dataset["train"]
-    eval_dataset = dataset["eval"]
+    dataset = load_dataset("mlfoundations-dev/OpenThoughts3", split="train").filter(
+        lambda outputs: [output is not None for output in outputs],
+        batched=True,
+        batch_size=1_000,
+        input_columns=["output"],
+    )
+
+    train_dataset = train_dataset = dataset.select(range(model_args.num_train_examples)).map(  # type: ignore
+        preprocess,
+        remove_columns=dataset.column_names,  # type: ignore
+        batched=True,
+        batch_size=1000,
+    )
+
+    if model_args.num_eval_examples is None:
+        eval_dataset = None
+    else:
+        eval_dataset = dataset.select(  # type: ignore
+            range(
+                model_args.num_train_examples,
+                model_args.num_train_examples + model_args.num_eval_examples,
+            )
+        ).map(  # type: ignore
+            preprocess,
+            remove_columns=dataset.column_names,  # type: ignore
+            batched=True,
+            batch_size=1000,
+        )
 
     trainer = SFTTrainer(
         model=model,
         args=training_args,
         train_dataset=train_dataset,  # type: ignore
         eval_dataset=eval_dataset,  # type: ignore
-        data_collator=padding_collator,
     )
 
     trainer.train()
