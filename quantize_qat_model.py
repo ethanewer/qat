@@ -40,7 +40,7 @@ def main():
     )
 
     args = parser.parse_args()
-    base = f"local/qwen3-{args.model_size}b/Qwen/Qwen3-{args.model_size}B-{args.nbits}bit"
+    base = f"local/qwen3-{args.model_size}b/Qwen/Qwen3-{args.model_size}B-{args.qat_nbits}bit"
 
     state_dict = {}
     for fname in sorted(os.listdir(base + "-qat")):
@@ -56,7 +56,8 @@ def main():
         hqq_group_size=args.hqq_group_size,
     )
 
-    quantized_model.save_pretrained(base + "-quantized")
+    suffix = "-quantized" if args.qat_nbits == args.hqq_nbits else f"-quantized-{args.hqq_nbits}bit"
+    quantized_model.save_pretrained(base + suffix)
 
 
 if __name__ == "__main__":
