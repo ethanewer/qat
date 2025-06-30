@@ -573,7 +573,7 @@ def update_quantized_linear_inplace(
     hqq_linear: HQQLinear,
     weight: Tensor,
     weight_clip_val: Tensor,
-    nbits: int,
+    qat_nbits: int,
     qat_group_size: Optional[int] = None,
     hqq_group_size: Optional[int] = None,
 ) -> None:
@@ -590,15 +590,15 @@ def update_quantized_linear_inplace(
 
     assert qat_group_size % hqq_group_size == 0
 
-    data, scale = quantize(weight.view(-1, qat_group_size), weight_clip_val, nbits)
+    data, scale = quantize(weight.view(-1, qat_group_size), weight_clip_val, qat_nbits)
     true_dequantized = (data * scale).view(hqq_linear.meta["shape"])  # type: ignore
-    if nbits == 2:
+    if qat_nbits == 2:
         data *= 2
         scale /= 2
-    elif nbits == 1:
+    elif qat_nbits == 1:
         data /= 2
         scale *= 2
-    elif nbits == 0:
+    elif qat_nbits == 0:
         data /= torch.tensor(1 / 1.5, dtype=data.dtype, device=data.device)
         scale *= torch.tensor(1 / 1.5, dtype=scale.dtype, device=scale.device)
 
@@ -641,7 +641,7 @@ def update_quantized_linear_inplace(
 def update_quantized_model_with_qat_state_dict(
     model: nn.Module,
     qat_state_dict: dict[str, Tensor],
-    nbits: int,
+    qat_nbits: int,
     qat_group_size: Optional[int] = None,
     hqq_group_size: Optional[int] = None,
 ) -> None:
@@ -651,7 +651,7 @@ def update_quantized_model_with_qat_state_dict(
                 hqq_linear=module,
                 weight=qat_state_dict[name + ".weight"],
                 weight_clip_val=qat_state_dict[name + ".weight_clip_val"],
-                nbits=nbits,
+                qat_nbits=qat_nbits,
                 qat_group_size=qat_group_size,
                 hqq_group_size=hqq_group_size,
             )
@@ -676,7 +676,8 @@ def replace_linear_with_hqq_linear(
 def get_quantized_model_from_qat_state_dict(
     qat_state_dict: dict[str, Tensor],
     base_model_name: str,
-    nbits: int,
+    qat_nbits: int,
+    hqq_nbits: float,
     qat_group_size: Optional[int] = None,
     hqq_group_size: Optional[int] = None,
     skip_modules: list[str] = ["lm_head"],
@@ -688,7 +689,7 @@ def get_quantized_model_from_qat_state_dict(
         torch_dtype=torch_dtype,
         device_map=device_map,
         quantization_config=HqqConfig(
-            nbits=1.58 if nbits == 0 else nbits,  # type: ignore
+            nbits=hqq_nbits,  # type: ignore
             group_size=hqq_group_size,  # type: ignore
             axis=1,
             skip_modules=skip_modules,
@@ -697,7 +698,7 @@ def get_quantized_model_from_qat_state_dict(
     update_quantized_model_with_qat_state_dict(
         model=quantized_model,
         qat_state_dict=qat_state_dict,
-        nbits=nbits,
+        qat_nbits=qat_nbits,
         qat_group_size=qat_group_size,
         hqq_group_size=hqq_group_size,
     )
@@ -705,25 +706,26 @@ def get_quantized_model_from_qat_state_dict(
 
 
 def test_mlp_quantization(
-    nbits: int | float,
+    qat_nbits: int,
+    hqq_nbits: float,
     qat_group_size: Optional[int],
     hqq_group_size: Optional[int],
 ) -> None:
     model1 = torch.nn.Sequential(torch.nn.Linear(512, 256, bias=False)).to(torch.bfloat16)
     replace_linear_with_qat_linear(
         model1,
-        nbits=0 if nbits == 1.58 else nbits,  # type: ignore
+        nbits=qat_nbits,
         group_size=qat_group_size,
     )
 
     model2 = torch.nn.Sequential(torch.nn.Linear(512, 256, bias=False)).to(torch.bfloat16)
-    quant_config = BaseQuantizeConfig(nbits=nbits, group_size=hqq_group_size)  # type: ignore
+    quant_config = BaseQuantizeConfig(nbits=hqq_nbits, group_size=hqq_group_size)  # type: ignore
     quant_config["weight_quant_params"]["optimize"] = False
     replace_linear_with_hqq_linear(model2, quant_config, device="cpu", compute_dtype=torch.bfloat16)
     update_quantized_model_with_qat_state_dict(
         model2,
         model1.state_dict(),
-        nbits=0 if nbits == 1.58 else nbits,  # type: ignore
+        qat_nbits=qat_nbits,
         qat_group_size=qat_group_size,
         hqq_group_size=hqq_group_size,
     )
@@ -735,12 +737,13 @@ def test_mlp_quantization(
         y2 = model2(x)
 
     assert torch.allclose(y1, y2), (
-        f"test_mlp_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
+        f"test_mlp_quantization({qat_nbits=}, {qat_nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
     )
 
 
 def test_huggingface_quantization(
-    nbits: int | float,
+    qat_nbits: int,
+    hqq_nbits: float,
     qat_group_size: Optional[int],
     hqq_group_size: Optional[int],
 ) -> None:
@@ -751,7 +754,7 @@ def test_huggingface_quantization(
     )
     replace_linear_with_qat_linear(
         model1.model,
-        nbits=0 if nbits == 1.58 else nbits,  # type: ignore
+        nbits=qat_nbits,
         group_size=qat_group_size,
     )
 
@@ -760,7 +763,7 @@ def test_huggingface_quantization(
         torch_dtype=torch.bfloat16,
         device_map="cpu",
     )
-    quant_config = BaseQuantizeConfig(nbits=nbits, group_size=hqq_group_size)  # type: ignore
+    quant_config = BaseQuantizeConfig(nbits=hqq_nbits, group_size=hqq_group_size)  # type: ignore
     quant_config["weight_quant_params"]["optimize"] = False
     replace_linear_with_hqq_linear(
         model2.model,
@@ -771,7 +774,7 @@ def test_huggingface_quantization(
     update_quantized_model_with_qat_state_dict(
         model2,
         model1.state_dict(),
-        nbits=0 if nbits == 1.58 else nbits,  # type: ignore
+        qat_nbits=qat_nbits,
         qat_group_size=qat_group_size,
         hqq_group_size=hqq_group_size,
     )
@@ -783,7 +786,7 @@ def test_huggingface_quantization(
         y2 = model2(input_ids).logits
 
     assert torch.allclose(y1, y2), (
-        f"test_huggingface_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
+        f"test_huggingface_quantization({qat_nbits=}, {qat_nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
     )
 
 

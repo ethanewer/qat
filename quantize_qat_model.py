@@ -15,7 +15,13 @@ def main():
         help="Size if Qwen3 model.",
     )
     parser.add_argument(
-        "--nbits",
+        "--qat-nbits",
+        type=int,
+        required=True,
+        help="Bit-width for quantized weights.",
+    )
+    parser.add_argument(
+        "--hqq-nbits",
         type=int,
         required=True,
         help="Bit-width for quantized weights.",
@@ -44,7 +50,8 @@ def main():
     quantized_model = get_quantized_model_from_qat_state_dict(
         state_dict,
         f"Qwen/Qwen3-{args.model_size}B",
-        nbits=args.nbits,
+        qat_nbits=args.qat_nbits,
+        hqq_nbits=args.hqq_nbits,
         qat_group_size=args.qat_group_size,
         hqq_group_size=args.hqq_group_size,
     )
