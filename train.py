@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import torch
-from datasets import load_dataset  # type: ignore
+from datasets import Dataset, load_dataset  # type: ignore
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_state_dict
 from transformers.hf_argparser import HfArgumentParser
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
@@ -17,8 +17,11 @@ class ModelArguments:
     local_dir: str = field(metadata={"help": "Directory where outputs are saved and loaded from."})
     input_model_filename: str = field(metadata={"help": "Pretrained model identifier or path."})
     output_model_filename: str = field(metadata={"help": "Folder to save the fine-tuned model."})
-    num_train_examples: str = field(metadata={"help": "Number of training examples."})
-    num_eval_examples: Optional[str] = field(
+    num_train_examples: Optional[int] = field(
+        default=None,
+        metadata={"help": "Number of training examples."},
+    )
+    num_eval_examples: Optional[int] = field(
         default=None,
         metadata={"help": "Number of eval examples."},
     )
@@ -31,14 +34,46 @@ class ModelArguments:
     )
 
 
-def preprocess(batch: dict[str, list[str]]) -> dict[str, list[dict[str, str]]]:
+def preprocess_batch(batch: dict[str, list[str]]) -> dict[str, list[str]]:
     n = len(batch["instruction_seed"])
     return {
-        "instruction": [
-            {"prompt": batch["instruction_seed"][i], "completion": batch["output"][i]}
-            for i in range(n)
-        ]
+        "prompt": [batch["instruction_seed"][i] for i in range(n)],
+        "completion": [batch["output"][i] for i in range(n)],
     }
+
+
+def load_and_preprocess_dataset(
+    num_train_examples: Optional[int],
+    num_eval_examples: Optional[int],
+) -> tuple[Dataset, Optional[Dataset]]:
+    ds = load_dataset("mlfoundations-dev/OpenThoughts3", split="train").filter(
+        lambda outputs: [output is not None for output in outputs],
+        batched=True,
+        batch_size=1_000,
+        input_columns=["output"],
+    )
+
+    if num_train_examples is None:
+        num_train_examples = len(ds) if num_eval_examples is None else len(ds) - num_eval_examples  # type: ignore
+
+    train_ds = ds.select(range(num_train_examples)).map(  # type: ignore
+        preprocess_batch,
+        remove_columns=ds.column_names,  # type: ignore
+        batched=True,
+        batch_size=1000,
+    )
+
+    if num_eval_examples is None:
+        eval_ds = None
+    else:
+        eval_ds = ds.select(range(num_train_examples, num_train_examples + num_eval_examples)).map(  # type: ignore
+            preprocess_batch,
+            remove_columns=ds.column_names,  # type: ignore
+            batched=True,
+            batch_size=1000,
+        )
+
+    return train_ds, eval_ds
 
 
 def main():
@@ -58,40 +93,16 @@ def main():
 
     model.config.use_cache = False
 
-    dataset = load_dataset("mlfoundations-dev/OpenThoughts3", split="train").filter(
-        lambda outputs: [output is not None for output in outputs],
-        batched=True,
-        batch_size=1_000,
-        input_columns=["output"],
+    train_ds, eval_ds = load_and_preprocess_dataset(
+        model_args.num_train_examples,
+        model_args.num_eval_examples,
     )
-
-    train_dataset = train_dataset = dataset.select(range(model_args.num_train_examples)).map(  # type: ignore
-        preprocess,
-        remove_columns=dataset.column_names,  # type: ignore
-        batched=True,
-        batch_size=1000,
-    )
-
-    if model_args.num_eval_examples is None:
-        eval_dataset = None
-    else:
-        eval_dataset = dataset.select(  # type: ignore
-            range(
-                model_args.num_train_examples,
-                model_args.num_train_examples + model_args.num_eval_examples,
-            )
-        ).map(  # type: ignore
-            preprocess,
-            remove_columns=dataset.column_names,  # type: ignore
-            batched=True,
-            batch_size=1000,
-        )
 
     trainer = SFTTrainer(
         model=model,
         args=training_args,
-        train_dataset=train_dataset,  # type: ignore
-        eval_dataset=eval_dataset,  # type: ignore
+        train_dataset=train_ds,
+        eval_dataset=eval_ds,
     )
 
     trainer.train()
