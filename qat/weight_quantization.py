@@ -10,22 +10,27 @@ from torch import Tensor, nn
 from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 from transformers.utils.quantization_config import HqqConfig
 
-from .quantization_util import LsqBinaryTernaryExtension, StretchedElasticQuant, quantize
+from .quantization_util import (
+    LsqBinaryTernaryExtension,
+    StretchedElasticQuant,
+    get_quant_min,
+    quantize,
+)
 
 
 class QATLinear(nn.Linear):
     def __init__(
         self,
         *args,
-        w_bits: int = 16,
+        nbits: int = 16,
         group_size: Optional[int] = None,
         weight_layerwise: bool = False,
     ) -> None:
         super().__init__(*args)
-        self.w_bits = w_bits
+        self.nbits = nbits
         self.group_size = group_size
         self.weight_layerwise = weight_layerwise
-        if self.w_bits < 16:
+        if self.nbits < 16:
             num_blocks = 1 if group_size is None else self.weight.shape[1] // group_size
             self.weight_clip_val = nn.Parameter(torch.Tensor(self.weight.shape[0] * num_blocks, 1))
 
@@ -36,20 +41,20 @@ class QATLinear(nn.Linear):
         if self.group_size is not None:
             real_weights = real_weights.view(-1, self.group_size)
 
-        if self.w_bits >= 16:
+        if self.nbits >= 16:
             weight = self.weight
-        elif self.w_bits == 2 or self.w_bits == 0:
+        elif self.nbits == 2 or self.nbits == 0:
             weight = StretchedElasticQuant.apply(
                 real_weights,
                 self.weight_clip_val,
-                self.w_bits,
+                self.nbits,
                 self.weight_layerwise,
             ).to(input.dtype)  # type: ignore
-        elif self.w_bits <= 4:
+        elif self.nbits <= 4:
             weight = LsqBinaryTernaryExtension.apply(
                 real_weights,
                 self.weight_clip_val,
-                self.w_bits,
+                self.nbits,
                 self.weight_layerwise,
             ).to(input.dtype)  # type: ignore
         else:
@@ -64,24 +69,24 @@ class QATLinear(nn.Linear):
 
 def patch_linear_with_qat_linear(
     linear: nn.Linear,
-    w_bits: int = 16,
+    nbits: int = 16,
     group_size: Optional[int] = None,
     weight_layerwise: bool = False,
 ) -> None:
-    linear.w_bits = w_bits  # type: ignore
+    linear.nbits = nbits  # type: ignore
     linear.group_size = group_size  # type: ignore
     linear.weight_layerwise = weight_layerwise  # type: ignore
-    if w_bits < 16:
+    if nbits < 16:
         weight = linear.weight if group_size is None else linear.weight.view(-1, group_size)
         with torch.no_grad():
-            if w_bits == 1:
-                scale = torch.mean(weight.abs(), dim=-1, keepdim=True).detach()
-            elif w_bits == 0 or w_bits == 2:
-                scale, _ = torch.max(torch.abs(weight), dim=-1, keepdim=True)
-            elif w_bits == 3 or w_bits == 4:
-                xmax, _ = torch.max(torch.abs(weight), dim=-1, keepdim=True)
-                maxq = 2 ** (w_bits - 1) - 1
-                scale = xmax / maxq
+            if nbits == 1:
+                scale = weight.abs().mean(dim=-1, keepdim=True).detach()
+            elif nbits == 0 or nbits == 2:
+                scale, _ = weight.abs().max(dim=-1, keepdim=True)
+            elif nbits == 3 or nbits == 4:
+                weight_max, _ = weight.abs().max(dim=-1, keepdim=True)
+                max_quant = 2 ** (nbits - 1) - 1
+                scale = weight_max / max_quant
             else:
                 raise NotImplementedError
 
@@ -136,6 +141,8 @@ def update_quantized_linear_inplace(
         data /= torch.tensor(1 / 1.5, dtype=data.dtype, device=data.device)
         scale *= torch.tensor(1 / 1.5, dtype=scale.dtype, device=scale.device)
 
+    quant_min = get_quant_min(nbits)
+
     with torch.no_grad():
         extra_dim = qat_group_size // hqq_group_size
         new_scale = scale[:, None].expand(scale.shape[0], extra_dim, 1).reshape(-1, 1)
@@ -147,13 +154,14 @@ def update_quantized_linear_inplace(
             )
         )
         hqq_linear.meta["zero"].fill_(
-            -data.min().to(
-                hqq_linear.meta["zero"].device,
-                hqq_linear.meta["zero"].dtype,
+            -torch.tensor(
+                quant_min,
+                device=hqq_linear.meta["zero"].device,
+                dtype=hqq_linear.meta["zero"].dtype,
             )
         )
         new_W_q = Quantizer.pack[hqq_linear.meta["packing"]](  # type: ignore
-            (data.view(-1, hqq_group_size) - data.min()).float()
+            (data.view(-1, hqq_group_size) - quant_min).float()
         )
 
         assert new_W_q.shape == hqq_linear.W_q.shape
@@ -268,9 +276,7 @@ def test_mlp_quantization(
         y1 = model1(x)
         y2 = model2(x)
 
-    assert torch.allclose(y1, y2), (
-        f"test_mlp_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
-    )
+    assert torch.allclose(y1, y2), f"test_mlp_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
 
 
 def test_huggingface_quantization(
@@ -316,6 +322,4 @@ def test_huggingface_quantization(
         y1 = model1(input_ids).logits
         y2 = model2(input_ids).logits
 
-    assert torch.allclose(y1, y2), (
-        f"test_huggingface_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
-    )
+    assert torch.allclose(y1, y2), f"test_huggingface_quantization({nbits=}, {qat_group_size=}, {hqq_group_size=}) failed."
