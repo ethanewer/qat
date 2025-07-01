@@ -54,7 +54,7 @@ def preprocess_batch(
 def main():
     args = parse_args()
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-4B")
-    ds = load_dataset("mlfoundations-dev/OpenThoughts3", split="train", streaming=True).filter(
+    ds = load_dataset("mlfoundations-dev/OpenThoughts3", split="train").filter(
         lambda outputs: [output is not None for output in outputs],
         batched=True,
         batch_size=1000,

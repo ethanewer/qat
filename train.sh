@@ -7,7 +7,7 @@ accelerate launch \
   --local_dir local/qwen3-${size}b \
   --input_model_filename Qwen/Qwen3-${size}B \
   --output_model_filename Qwen/Qwen3-${size}B-${nbits}bit \
-  --train_data_local_path local/qwen3-${size}b-dataset \
+  --train_data_local_path local/qwen3-openthoughts-dataset \
   --qat True \
   --nbits $nbits \
   --group_size 128 \
