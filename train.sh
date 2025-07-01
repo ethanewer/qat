@@ -7,10 +7,11 @@ accelerate launch \
   --local_dir local/qwen3-${size}b \
   --input_model_filename Qwen/Qwen3-${size}B \
   --output_model_filename Qwen/Qwen3-${size}B-${nbits}bit \
+  --train_data_local_path local/qwen3-${size}b-dataset \
   --qat True \
   --nbits $nbits \
   --group_size 128 \
-  --model_max_length 32768 \
+  --model_max_length 16384 \
   \
   --do_train True \
   --do_eval False \
@@ -19,7 +20,6 @@ accelerate launch \
   --tf32 False \
   --gradient_checkpointing False \
   \
-  --num_eval_examples 512 \
   --num_train_epochs 2 \
   --eval_strategy steps \
   --eval_steps 50 \
@@ -37,4 +37,4 @@ accelerate launch \
   --logging_dir local/output/runs/current \
   --disable_tqdm False
 
-python quantize_qat_model.py --model-size=$size --qat-nbits=$nbits --hqq-nbits=4
+python quantize_qat_model.py --model-size=$size --nbits=$nbits

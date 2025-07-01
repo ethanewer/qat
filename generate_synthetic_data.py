@@ -12,7 +12,7 @@ from vllm import LLM, SamplingParams  # type: ignore
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Generate Qwen3 distillation dataset")
+    parser = argparse.ArgumentParser(description="Generate Qwen3 distillation dataset,")
     parser.add_argument(
         "--model-size",
         type=str,
